@@ -167,6 +167,24 @@ func schema_pkg_apis_backendconfig_v1_CDNConfig(ref common.ReferenceCallback) co
 							Ref: ref("k8s.io/ingress-gce/pkg/apis/backendconfig/v1.CacheKeyPolicy"),
 						},
 					},
+					"cacheMode": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"requestCoalescing": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"boolean"},
+							Format: "",
+						},
+					},
+					"serveWhileStale": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"integer"},
+							Format: "int64",
+						},
+					},
 				},
 				Required: []string{"enabled"},
 			},

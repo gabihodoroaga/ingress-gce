@@ -170,6 +170,21 @@ func (in *CDNConfig) DeepCopyInto(out *CDNConfig) {
 		*out = new(CacheKeyPolicy)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.CacheMode != nil {
+		in, out := &in.CacheMode, &out.CacheMode
+		*out = new(string)
+		**out = **in
+	}
+	if in.RequestCoalescing != nil {
+		in, out := &in.RequestCoalescing, &out.RequestCoalescing
+		*out = new(bool)
+		**out = **in
+	}
+	if in.ServeWhileStale != nil {
+		in, out := &in.ServeWhileStale, &out.ServeWhileStale
+		*out = new(int64)
+		**out = **in
+	}
 	return
 }
 

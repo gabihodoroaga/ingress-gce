@@ -46,10 +46,10 @@ func EnsureCDN(sp utils.ServicePort, be *composite.BackendService) bool {
 // to the passed in compute.BackendService. A GCE API call still needs to be
 // made to actually persist the changes.
 func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) {
-	beConfig := sp.BackendConfig
+	cdnConfig := sp.BackendConfig.Spec.Cdn
 	// Apply the boolean switch
-	be.EnableCDN = beConfig.Spec.Cdn.Enabled
-	cacheKeyPolicy := beConfig.Spec.Cdn.CachePolicy
+	be.EnableCDN = cdnConfig.Enabled
+	cacheKeyPolicy := cdnConfig.CachePolicy
 	// Apply the cache key policies if the BackendConfig contains them.
 	if cacheKeyPolicy != nil {
 		be.CdnPolicy = &composite.BackendServiceCdnPolicy{CacheKeyPolicy: &composite.CacheKeyPolicy{}}
@@ -62,4 +62,13 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) {
 	// Note that upon creation of a BackendServices, the fields 'IncludeHost',
 	// 'IncludeProtocol' and 'IncludeQueryString' all default to true if not
 	// explicitly specified.
+	if cdnConfig.CacheMode != nil {
+		be.CdnPolicy.CacheMode = *cdnConfig.CacheMode
+	}
+	if cdnConfig.RequestCoalescing != nil {
+		be.CdnPolicy.RequestCoalescing = *cdnConfig.RequestCoalescing
+	}
+	if cdnConfig.ServeWhileStale != nil {
+		be.CdnPolicy.ServeWhileStale = *cdnConfig.ServeWhileStale
+	}
 }
