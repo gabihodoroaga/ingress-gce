@@ -83,11 +83,42 @@ type OAuthClientCredentials struct {
 // CDNConfig contains configuration for CDN-enabled backends.
 // +k8s:openapi-gen=true
 type CDNConfig struct {
-	Enabled            bool            `json:"enabled"`
-	CachePolicy        *CacheKeyPolicy `json:"cachePolicy,omitempty"`
-	CacheMode          *string         `json:"cacheMode,omitempty"`
-	RequestCoalescing  *bool           `json:"requestCoalescing,omitempty"`
-	ServeWhileStaleSec *int64          `json:"serveWhileStaleSec,omitempty"`
+	Enabled                     bool                          `json:"enabled"`
+	BypassCacheOnRequestHeaders []*BypassCacheOnRequestHeader `json:"bypassCacheOnRequestHeaders,omitempty"`
+	CachePolicy                 *CacheKeyPolicy               `json:"cachePolicy,omitempty"`
+	CacheMode                   *string                       `json:"cacheMode,omitempty"`
+	ClientTtl                   *int64                        `json:"clientTtl,omitempty"`
+	DefaultTtl                  *int64                        `json:"defaultTtl,omitempty"`
+	MaxTtl                      *int64                        `json:"maxTtl,omitempty"`
+	NegativeCaching             *bool                         `json:"negativeCaching,omitempty"`
+	NegativeCachingPolicy       []*NegativeCachingPolicy      `json:"negativeCachingPolicy,omitempty"`
+	RequestCoalescing           *bool                         `json:"requestCoalescing,omitempty"`
+	ServeWhileStaleSec          *int64                        `json:"serveWhileStaleSec,omitempty"`
+	SignedUrlCacheMaxAgeSec     *int64                        `json:"signedUrlCacheMaxAgeSec,omitempty,string"`
+	SignedUrlKeyNames           []string                      `json:"signedUrlKeyNames,omitempty"`
+}
+
+// CDNConfig contains configuration for how requests containing specific request
+// headers bypass the cache, even if the content was previously cached.
+// +k8s:openapi-gen=true
+type BypassCacheOnRequestHeader struct {
+	// The header field name to match on when bypassing cache. Values are
+	// case-insensitive.
+	HeaderName string `json:"headerName,omitempty"`
+}
+
+// CDNConfig contains configuration for how negative caching is applied.
+// +k8s:openapi-gen=true
+type NegativeCachingPolicy struct {
+	// The HTTP status code to define a TTL against. Only HTTP status codes
+	// 300, 301, 308, 404, 405, 410, 421, 451 and 501 are can be specified
+	// as values, and you cannot specify a status code more than once.
+	Code int64 `json:"code,omitempty"`
+	// The TTL (in seconds) for which to cache responses with the
+	// corresponding status code. The maximum allowed value is 1800s (30
+	// minutes), noting that infrequently accessed objects may be evicted
+	// from the cache before the defined TTL.
+	Ttl int64 `json:"ttl,omitempty"`
 }
 
 // CacheKeyPolicy contains configuration for how requests to a CDN-enabled backend are cached.
