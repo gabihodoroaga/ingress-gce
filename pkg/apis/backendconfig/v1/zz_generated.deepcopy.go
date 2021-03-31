@@ -180,8 +180,8 @@ func (in *CDNConfig) DeepCopyInto(out *CDNConfig) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.ServeWhileStale != nil {
-		in, out := &in.ServeWhileStale, &out.ServeWhileStale
+	if in.ServeWhileStaleSec != nil {
+		in, out := &in.ServeWhileStaleSec, &out.ServeWhileStaleSec
 		*out = new(int64)
 		**out = **in
 	}
