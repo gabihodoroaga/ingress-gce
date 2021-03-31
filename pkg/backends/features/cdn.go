@@ -71,4 +71,39 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) {
 	if cdnConfig.ServeWhileStaleSec != nil {
 		be.CdnPolicy.ServeWhileStale = *cdnConfig.ServeWhileStaleSec
 	}
+	if cdnConfig.MaxTtl != nil {
+		be.CdnPolicy.MaxTtl = *cdnConfig.MaxTtl
+	}
+	if cdnConfig.ClientTtl != nil {
+		be.CdnPolicy.ClientTtl = *cdnConfig.ClientTtl
+	}
+	if cdnConfig.DefaultTtl != nil {
+		be.CdnPolicy.DefaultTtl = *cdnConfig.DefaultTtl
+	}
+	if cdnConfig.NegativeCaching != nil {
+		be.CdnPolicy.NegativeCaching = *cdnConfig.NegativeCaching
+	}
+	if cdnConfig.SignedUrlCacheMaxAgeSec != nil {
+		be.CdnPolicy.SignedUrlCacheMaxAgeSec = *cdnConfig.SignedUrlCacheMaxAgeSec
+	}
+	if cdnConfig.SignedUrlKeyNames != nil {
+		be.CdnPolicy.SignedUrlKeyNames = cdnConfig.SignedUrlKeyNames
+	}
+	for _, policyRef := range cdnConfig.NegativeCachingPolicy {
+		be.CdnPolicy.NegativeCachingPolicy = append(
+			be.CdnPolicy.NegativeCachingPolicy,
+			&composite.BackendServiceCdnPolicyNegativeCachingPolicy{
+				Code: policyRef.Code,
+				Ttl:  policyRef.Ttl,
+			},
+		)
+	}
+	for _, policyRef := range cdnConfig.BypassCacheOnRequestHeaders {
+		be.CdnPolicy.BypassCacheOnRequestHeaders = append(
+			be.CdnPolicy.BypassCacheOnRequestHeaders,
+			&composite.BackendServiceCdnPolicyBypassCacheOnRequestHeader{
+				HeaderName: policyRef.HeaderName,
+			},
+		)
+	}
 }
