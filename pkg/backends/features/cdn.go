@@ -68,7 +68,7 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) {
 	if cdnConfig.RequestCoalescing != nil {
 		be.CdnPolicy.RequestCoalescing = *cdnConfig.RequestCoalescing
 	}
-	if cdnConfig.ServeWhileStale != nil {
-		be.CdnPolicy.ServeWhileStale = *cdnConfig.ServeWhileStale
+	if cdnConfig.ServeWhileStaleSec != nil {
+		be.CdnPolicy.ServeWhileStale = *cdnConfig.ServeWhileStaleSec
 	}
 }
