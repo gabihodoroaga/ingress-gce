@@ -4148,8 +4148,11 @@ func (backendService *BackendService) ToAlpha() (*computealpha.BackendService, e
 		return nil, fmt.Errorf("error converting %T to compute alpha type via JSON: %v", backendService, err)
 	}
 	// Set force send fields. This is a temporary hack.
-	if alpha.CdnPolicy != nil && alpha.CdnPolicy.CacheKeyPolicy != nil {
-		alpha.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
+	if alpha.CdnPolicy != nil {
+		if alpha.CdnPolicy.CacheKeyPolicy != nil {
+			alpha.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
+		}
+		alpha.CdnPolicy.ForceSendFields = []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}
 	}
 	if alpha.Iap != nil {
 		alpha.Iap.ForceSendFields = []string{"Enabled", "Oauth2ClientId", "Oauth2ClientSecret"}
@@ -4173,8 +4176,11 @@ func (backendService *BackendService) ToBeta() (*computebeta.BackendService, err
 		return nil, fmt.Errorf("error converting %T to compute beta type via JSON: %v", backendService, err)
 	}
 	// Set force send fields. This is a temporary hack.
-	if beta.CdnPolicy != nil && beta.CdnPolicy.CacheKeyPolicy != nil {
-		beta.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
+	if beta.CdnPolicy != nil {
+		if beta.CdnPolicy.CacheKeyPolicy != nil {
+			beta.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
+		}
+		beta.CdnPolicy.ForceSendFields = []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}
 	}
 	if beta.Iap != nil {
 		beta.Iap.ForceSendFields = []string{"Enabled", "Oauth2ClientId", "Oauth2ClientSecret"}
@@ -4198,8 +4204,11 @@ func (backendService *BackendService) ToGA() (*compute.BackendService, error) {
 		return nil, fmt.Errorf("error converting %T to compute ga type via JSON: %v", backendService, err)
 	}
 	// Set force send fields. This is a temporary hack.
-	if ga.CdnPolicy != nil && ga.CdnPolicy.CacheKeyPolicy != nil {
-		ga.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
+	if ga.CdnPolicy != nil {
+		if ga.CdnPolicy.CacheKeyPolicy != nil {
+			ga.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
+		}
+		ga.CdnPolicy.ForceSendFields = []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}
 	}
 	if ga.Iap != nil {
 		ga.Iap.ForceSendFields = []string{"Enabled", "Oauth2ClientId", "Oauth2ClientSecret"}

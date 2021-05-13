@@ -249,7 +249,7 @@ func schema_pkg_apis_backendconfig_v1_CDNConfig(ref common.ReferenceCallback) co
 							Format: "",
 						},
 					},
-					"serveWhileStaleSec": {
+					"serveWhileStale": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"integer"},
 							Format: "int64",
