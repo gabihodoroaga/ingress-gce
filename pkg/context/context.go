@@ -23,18 +23,20 @@ import (
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	informerv1 "k8s.io/client-go/informers/core/v1"
-	informerv1beta1 "k8s.io/client-go/informers/networking/v1beta1"
+	informernetworking "k8s.io/client-go/informers/networking/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
+	sav1alpha1 "k8s.io/ingress-gce/pkg/apis/serviceattachment/v1alpha1"
 	backendconfigclient "k8s.io/ingress-gce/pkg/backendconfig/client/clientset/versioned"
 	informerbackendconfig "k8s.io/ingress-gce/pkg/backendconfig/client/informers/externalversions/backendconfig/v1"
 	"k8s.io/ingress-gce/pkg/cmconfig"
@@ -104,6 +106,7 @@ type ControllerContext struct {
 type ControllerContextConfig struct {
 	Namespace    string
 	ResyncPeriod time.Duration
+	NumL4Workers int
 	// DefaultBackendSvcPortID is the ServicePort for the system default backend.
 	DefaultBackendSvcPort utils.ServicePort
 	HealthCheckPath       string
@@ -138,7 +141,7 @@ func NewControllerContext(
 		KubeSystemUID:           kubeSystemUID,
 		ControllerMetrics:       metrics.NewControllerMetrics(),
 		ControllerContextConfig: config,
-		IngressInformer:         informerv1beta1.NewIngressInformer(kubeClient, config.Namespace, config.ResyncPeriod, utils.NewNamespaceIndexer()),
+		IngressInformer:         informernetworking.NewIngressInformer(kubeClient, config.Namespace, config.ResyncPeriod, utils.NewNamespaceIndexer()),
 		ServiceInformer:         informerv1.NewServiceInformer(kubeClient, config.Namespace, config.ResyncPeriod, utils.NewNamespaceIndexer()),
 		BackendConfigInformer:   informerbackendconfig.NewBackendConfigInformer(backendConfigClient, config.Namespace, config.ResyncPeriod, utils.NewNamespaceIndexer()),
 		EndpointInformer:        informerv1.NewEndpointsInformer(kubeClient, config.Namespace, config.ResyncPeriod, utils.NewNamespaceIndexer()),
@@ -154,7 +157,7 @@ func NewControllerContext(
 	}
 
 	if ingParamsClient != nil {
-		context.IngClassInformer = informerv1beta1.NewIngressClassInformer(kubeClient, config.ResyncPeriod, utils.NewNamespaceIndexer())
+		context.IngClassInformer = informernetworking.NewIngressClassInformer(kubeClient, config.ResyncPeriod, utils.NewNamespaceIndexer())
 		context.IngParamsInformer = informeringparams.NewGCPIngressParamsInformer(ingParamsClient, config.ResyncPeriod, utils.NewNamespaceIndexer())
 	}
 
@@ -200,7 +203,7 @@ func (ctx *ControllerContext) initEnableASM() {
 		ctx.ASMConfigController.DisableASM()
 		return
 	}
-	destinationRuleCRD, err := apiextensionClient.ApiextensionsV1beta1().CustomResourceDefinitions().Get(context2.TODO(), destinationRuleCRDName, metav1.GetOptions{})
+	destinationRuleCRD, err := apiextensionClient.ApiextensionsV1().CustomResourceDefinitions().Get(context2.TODO(), destinationRuleCRDName, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			ctx.ASMConfigController.RecordEvent("Warning", "FailedValidateDestinationRuleCRD", "Cannot find DestinationRule CRD, disabling ASM Mode, please check Istio setup.")
@@ -210,9 +213,9 @@ func (ctx *ControllerContext) initEnableASM() {
 		ctx.ASMConfigController.DisableASM()
 		return
 	}
-	if destinationRuleCRD.Spec.Version != destinationRuleAPIVersion {
+	if destinationRuleCRD.Spec.Versions[0].Name != destinationRuleAPIVersion {
 		ctx.ASMConfigController.RecordEvent("Warning", "FailedValidateDestinationRuleCRD", fmt.Sprintf("Only Support Istio API: %s, but found %s, disabling the ASM Mode, please check Istio setup.",
-			destinationRuleAPIVersion, destinationRuleCRD.Spec.Version))
+			destinationRuleAPIVersion, destinationRuleCRD.Spec.Versions[0].Name))
 		ctx.ASMConfigController.DisableASM()
 		return
 	}
@@ -269,6 +272,10 @@ func (ctx *ControllerContext) HasSynced() bool {
 		funcs = append(funcs, ctx.IngParamsInformer.HasSynced)
 	}
 
+	if ctx.SAInformer != nil {
+		funcs = append(funcs, ctx.SAInformer.HasSynced)
+	}
+
 	for _, f := range funcs {
 		if !f() {
 			return false
@@ -288,7 +295,7 @@ func (ctx *ControllerContext) Recorder(ns string) record.EventRecorder {
 	broadcaster.StartRecordingToSink(&corev1.EventSinkImpl{
 		Interface: ctx.KubeClient.CoreV1().Events(ns),
 	})
-	rec := broadcaster.NewRecorder(scheme.Scheme, apiv1.EventSource{Component: "loadbalancer-controller"})
+	rec := broadcaster.NewRecorder(ctx.generateScheme(), apiv1.EventSource{Component: "loadbalancer-controller"})
 	ctx.recorders[ns] = rec
 
 	return rec
@@ -348,6 +355,9 @@ func (ctx *ControllerContext) Start(stopCh chan struct{}) {
 	if ctx.IngParamsInformer != nil {
 		go ctx.IngParamsInformer.Run(stopCh)
 	}
+	if ctx.SAInformer != nil {
+		go ctx.SAInformer.Run(stopCh)
+	}
 	// Export ingress usage metrics.
 	go ctx.ControllerMetrics.Run(stopCh)
 }
@@ -373,4 +383,17 @@ func (ctx *ControllerContext) FrontendConfigs() *typed.FrontendConfigStore {
 		return typed.WrapFrontendConfigStore(nil)
 	}
 	return typed.WrapFrontendConfigStore(ctx.FrontendConfigInformer.GetStore())
+}
+
+// generateScheme creates a scheme and adds relevant CRD schemes that will be used
+// for events
+func (ctx *ControllerContext) generateScheme() *runtime.Scheme {
+	controllerScheme := scheme.Scheme
+
+	if ctx.SAInformer != nil {
+		if err := sav1alpha1.AddToScheme(controllerScheme); err != nil {
+			klog.Errorf("Failed to add ServiceAttachment CRD scheme to event recorder")
+		}
+	}
+	return controllerScheme
 }

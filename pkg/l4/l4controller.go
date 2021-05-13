@@ -23,6 +23,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	listers "k8s.io/client-go/listers/core/v1"
@@ -57,6 +58,7 @@ type L4Controller struct {
 	// kubeClient, needed for attaching finalizer
 	client        kubernetes.Interface
 	svcQueue      utils.TaskQueue
+	numWorkers    int
 	serviceLister cache.Indexer
 	nodeLister    listers.NodeLister
 	stopCh        chan struct{}
@@ -75,19 +77,25 @@ type L4Controller struct {
 
 // NewController creates a new instance of the L4 ILB controller.
 func NewController(ctx *context.ControllerContext, stopCh chan struct{}) *L4Controller {
+	if ctx.NumL4Workers <= 0 {
+		klog.Infof("L4 Worker count has not been set, setting to 1")
+		ctx.NumL4Workers = 1
+	}
 	l4c := &L4Controller{
 		ctx:           ctx,
 		client:        ctx.KubeClient,
 		serviceLister: ctx.ServiceInformer.GetIndexer(),
 		nodeLister:    listers.NewNodeLister(ctx.NodeInformer.GetIndexer()),
 		stopCh:        stopCh,
+		numWorkers:    ctx.NumL4Workers,
 	}
 	l4c.namer = ctx.L4Namer
 	l4c.translator = translator.NewTranslator(ctx)
 	l4c.backendPool = backends.NewPool(ctx.Cloud, l4c.namer)
 	l4c.NegLinker = backends.NewNEGLinker(l4c.backendPool, negtypes.NewAdapter(ctx.Cloud), ctx.Cloud)
 
-	l4c.svcQueue = utils.NewPeriodicTaskQueue("l4", "services", l4c.sync)
+	l4c.svcQueue = utils.NewPeriodicTaskQueueWithMultipleWorkers("l4", "services", l4c.numWorkers, l4c.sync)
+
 	ctx.ServiceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			addSvc := obj.(*v1.Service)
@@ -149,7 +157,8 @@ func (l4c *L4Controller) checkHealth() error {
 
 func (l4c *L4Controller) Run() {
 	defer l4c.shutdown()
-	go l4c.svcQueue.Run()
+	klog.Infof("Running L4 Controller with %d worker goroutines", l4c.numWorkers)
+	l4c.svcQueue.Run()
 	<-l4c.stopCh
 }
 
@@ -190,7 +199,7 @@ func (l4c *L4Controller) processServiceCreateOrUpdate(key string, service *v1.Se
 
 	// Ensure v2 finalizer
 	if err := common.EnsureServiceFinalizer(service, common.ILBFinalizerV2, l4c.ctx.KubeClient); err != nil {
-		return fmt.Errorf("Failed to attach finalizer to service %s/%s, err %v", service.Namespace, service.Name, err)
+		return fmt.Errorf("Failed to attach finalizer to service %s/%s, err %w", service.Namespace, service.Name, err)
 	}
 	l4 := loadbalancers.NewL4Handler(service, l4c.ctx.Cloud, meta.Regional, l4c.namer, l4c.ctx.Recorder(service.Namespace), &l4c.sharedResourcesLock)
 	nodeNames, err := utils.GetReadyNodeNames(l4c.nodeLister)
@@ -227,7 +236,7 @@ func (l4c *L4Controller) processServiceCreateOrUpdate(key string, service *v1.Se
 	if err = l4c.updateAnnotations(service, annotationsMap); err != nil {
 		l4c.ctx.Recorder(service.Namespace).Eventf(service, v1.EventTypeWarning, "SyncLoadBalancerFailed",
 			"Failed to update annotations for load balancer, err: %v", err)
-		return fmt.Errorf("failed to set resource annotations, err: %v", err)
+		return fmt.Errorf("failed to set resource annotations, err: %w", err)
 	}
 	return nil
 }
@@ -245,12 +254,12 @@ func (l4c *L4Controller) processServiceDeletion(key string, svc *v1.Service) err
 	if err := l4c.updateAnnotations(svc, nil); err != nil {
 		l4c.ctx.Recorder(svc.Namespace).Eventf(svc, v1.EventTypeWarning, "DeleteLoadBalancer",
 			"Error resetting resource annotations for load balancer: %v", err)
-		return fmt.Errorf("failed to reset resource annotations, err: %v", err)
+		return fmt.Errorf("failed to reset resource annotations, err: %w", err)
 	}
 	if err := common.EnsureDeleteServiceFinalizer(svc, common.ILBFinalizerV2, l4c.ctx.KubeClient); err != nil {
 		l4c.ctx.Recorder(svc.Namespace).Eventf(svc, v1.EventTypeWarning, "DeleteLoadBalancerFailed",
 			"Error removing finalizer from load balancer: %v", err)
-		return fmt.Errorf("failed to remove ILB finalizer, err: %v", err)
+		return fmt.Errorf("failed to remove ILB finalizer, err: %w", err)
 	}
 
 	namespacedName := types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}
@@ -259,10 +268,10 @@ func (l4c *L4Controller) processServiceDeletion(key string, svc *v1.Service) err
 	metrics.PublishL4ILBSyncLatency(true, syncTypeDelete, startTime)
 
 	// Reset the loadbalancer status, Ignore NotFound error since the service can already be deleted at this point.
-	if err := l4c.updateServiceStatus(svc, &v1.LoadBalancerStatus{}); utils.IgnoreHTTPNotFound(err) != nil {
+	if err := l4c.updateServiceStatus(svc, &v1.LoadBalancerStatus{}); err != nil && !errors.IsNotFound(err) {
 		l4c.ctx.Recorder(svc.Namespace).Eventf(svc, v1.EventTypeWarning, "DeleteLoadBalancer",
 			"Error reseting load balancer status to empty: %v", err)
-		return fmt.Errorf("failed to reset ILB status, err: %v", err)
+		return fmt.Errorf("failed to reset ILB status, err: %w", err)
 	}
 	l4c.ctx.Recorder(svc.Namespace).Eventf(svc, v1.EventTypeNormal, "DeletedLoadBalancer", "Deleted load balancer")
 	return nil
@@ -286,7 +295,7 @@ func (l4c *L4Controller) sync(key string) error {
 	l4c.syncTracker.Track()
 	svc, exists, err := l4c.ctx.Services().GetByKey(key)
 	if err != nil {
-		return fmt.Errorf("Failed to lookup service for key %s : %s", key, err)
+		return fmt.Errorf("Failed to lookup service for key %s : %w", key, err)
 	}
 	if !exists || svc == nil {
 		// The service will not exist if its resources and finalizer are handled by the legacy service controller and

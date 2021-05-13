@@ -41,6 +41,7 @@ import (
 	"k8s.io/client-go/rest"
 	backendconfigclient "k8s.io/ingress-gce/pkg/backendconfig/client/clientset/versioned"
 	frontendconfigclient "k8s.io/ingress-gce/pkg/frontendconfig/client/clientset/versioned"
+	serviceattachment "k8s.io/ingress-gce/pkg/serviceattachment/client/clientset/versioned"
 	svcnegclient "k8s.io/ingress-gce/pkg/svcneg/client/clientset/versioned"
 	"k8s.io/klog"
 )
@@ -85,6 +86,11 @@ func NewFramework(config *rest.Config, options Options) *Framework {
 		klog.Fatalf("Failed to create SvcNeg client: %v", err)
 	}
 
+	saClient, err := serviceattachment.NewForConfig(config)
+	if err != nil {
+		klog.Fatalf("Failed to create Service Attachment client: %v", err)
+	}
+
 	f := &Framework{
 		RestConfig:           config,
 		Clientset:            kubernetes.NewForConfigOrDie(config),
@@ -92,6 +98,7 @@ func NewFramework(config *rest.Config, options Options) *Framework {
 		FrontendConfigClient: frontendConfigClient,
 		BackendConfigClient:  backendConfigClient,
 		SvcNegClient:         svcNegClient,
+		SAClient:             saClient,
 		Project:              options.Project,
 		Region:               options.Region,
 		Network:              options.Network,
@@ -104,7 +111,7 @@ func NewFramework(config *rest.Config, options Options) *Framework {
 
 	// Preparing dynamic client if Istio:DestinationRule CRD exisits and matches the required version.
 	// The client is used by the ASM e2e tests.
-	destinationRuleCRD, err := f.crdClient.ApiextensionsV1beta1().CustomResourceDefinitions().Get(context.TODO(), destinationRuleCRDName, metav1.GetOptions{})
+	destinationRuleCRD, err := f.crdClient.ApiextensionsV1().CustomResourceDefinitions().Get(context.TODO(), destinationRuleCRDName, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			klog.Infof("Cannot load DestinationRule CRD, Istio is disabled on this cluster.")
@@ -112,8 +119,8 @@ func NewFramework(config *rest.Config, options Options) *Framework {
 			klog.Fatalf("Failed to load DestinationRule CRD, error: %s", err)
 		}
 	} else {
-		if destinationRuleCRD.Spec.Version != destinationRuleAPIVersion {
-			klog.Fatalf("The cluster Istio version not meet the testing requirement, want: %s, got: %s.", destinationRuleAPIVersion, destinationRuleCRD.Spec.Version)
+		if destinationRuleCRD.Spec.Versions[0].Name != destinationRuleAPIVersion {
+			klog.Fatalf("The cluster Istio version not meet the testing requirement, want: %s, got: %s.", destinationRuleAPIVersion, destinationRuleCRD.Spec.Versions[0].Name)
 		} else {
 			dynamicClient, err := dynamic.NewForConfig(config)
 			if err != nil {
@@ -135,6 +142,7 @@ type Framework struct {
 	BackendConfigClient   *backendconfigclient.Clientset
 	FrontendConfigClient  *frontendconfigclient.Clientset
 	SvcNegClient          *svcnegclient.Clientset
+	SAClient              *serviceattachment.Clientset
 	Project               string
 	Region                string
 	Network               string

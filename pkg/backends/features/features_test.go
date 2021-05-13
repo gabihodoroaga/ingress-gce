@@ -20,8 +20,8 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
+	v1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"k8s.io/ingress-gce/pkg/annotations"
@@ -35,7 +35,7 @@ var (
 			Namespace: "testNS",
 			Name:      "testName",
 		},
-		Port: intstr.IntOrString{IntVal: 80},
+		Port: v1.ServiceBackendPort{Number: 80},
 	}
 
 	svcPortDefault = utils.ServicePort{
@@ -134,13 +134,8 @@ func TestVersionFromFeatures(t *testing.T) {
 			expectedVersion: meta.VersionBeta,
 		},
 		{
-			desc:            "SecurityPolicy",
-			features:        []string{FeatureSecurityPolicy},
-			expectedVersion: meta.VersionBeta,
-		},
-		{
-			desc:            "NEG",
-			features:        []string{FeatureNEG},
+			desc:            "NEG + SecurityPolicy",
+			features:        []string{FeatureNEG, FeatureSecurityPolicy},
 			expectedVersion: meta.VersionGA,
 		},
 		{
@@ -186,7 +181,7 @@ func TestVersionFromDescription(t *testing.T) {
 		{
 			desc:               "SecurityPolicy",
 			backendServiceDesc: `{"kubernetes.io/service-name":"my-service","kubernetes.io/service-port":"my-port","x-features":["SecurityPolicy"]}`,
-			expectedVersion:    meta.VersionBeta,
+			expectedVersion:    meta.VersionGA,
 		},
 		{
 			desc:               "HTTP2 + SecurityPolicy",
@@ -226,7 +221,7 @@ func TestVersionFromServicePort(t *testing.T) {
 		{
 			desc:            "enabled security policy",
 			svcPort:         svcPortWithSecurityPolicy,
-			expectedVersion: meta.VersionBeta,
+			expectedVersion: meta.VersionGA,
 		},
 		{
 			desc:            "enabled http2 + security policy",

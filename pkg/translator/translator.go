@@ -25,7 +25,7 @@ import (
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	api_v1 "k8s.io/api/core/v1"
-	"k8s.io/api/networking/v1beta1"
+	v1 "k8s.io/api/networking/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	frontendconfigv1beta1 "k8s.io/ingress-gce/pkg/apis/frontendconfig/v1beta1"
@@ -38,7 +38,7 @@ import (
 // Env contains all k8s & GCP configuration needed to perform the translation.
 type Env struct {
 	// Ing is the Ingress we are translating.
-	Ing *v1beta1.Ingress
+	Ing *v1.Ingress
 	// TODO(shance): this should be a map, similar to SecretsMap
 	// FrontendConfig is the frontendconfig associated with the Ingress
 	FrontendConfig *frontendconfigv1beta1.FrontendConfig
@@ -56,7 +56,7 @@ type Env struct {
 }
 
 // NewEnv returns an Env for the given Ingress.
-func NewEnv(ing *v1beta1.Ingress, client kubernetes.Interface, vip, net, subnet string) (*Env, error) {
+func NewEnv(ing *v1.Ingress, client kubernetes.Interface, vip, net, subnet string) (*Env, error) {
 	ret := &Env{Ing: ing, SecretsMap: make(map[string]*api_v1.Secret), VIP: vip, Network: net, Subnetwork: subnet}
 	for _, tlsSpec := range ing.Spec.TLS {
 		if len(tlsSpec.SecretName) == 0 {
@@ -104,25 +104,29 @@ type TLSCerts struct {
 }
 
 // Secrets returns the Secrets from the environment which are specified in the Ingress.
-func secrets(env *Env) ([]*api_v1.Secret, error) {
+func secrets(env *Env) ([]*api_v1.Secret, []error) {
 	var ret []*api_v1.Secret
+	var errors []error
 	spec := env.Ing.Spec
 	for _, tlsSpec := range spec.TLS {
 		secret, ok := env.SecretsMap[tlsSpec.SecretName]
 		if !ok {
-			return nil, fmt.Errorf("secret %q does not exist", tlsSpec.SecretName)
+			errors = append(errors, fmt.Errorf("secret %q does not exist", tlsSpec.SecretName))
+			break
 		}
 		// Fail-fast if the user's secret does not have the proper fields specified.
 		if secret.Data[api_v1.TLSCertKey] == nil {
-			return nil, fmt.Errorf("secret %q does not specify cert as string data", tlsSpec.SecretName)
+			errors = append(errors, fmt.Errorf("secret %q does not specify cert as string data", tlsSpec.SecretName))
+			break
 		}
 		if secret.Data[api_v1.TLSPrivateKeyKey] == nil {
-			return nil, fmt.Errorf("secret %q does not specify private key as string data", tlsSpec.SecretName)
+			errors = append(errors, fmt.Errorf("secret %q does not specify private key as string data", tlsSpec.SecretName))
+			break
 		}
 		ret = append(ret, secret)
 	}
 
-	return ret, nil
+	return ret, errors
 }
 
 // The gce api uses the name of a path rule to match a host rule.
@@ -396,13 +400,11 @@ func GetCertHash(contents string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(contents)))[:16]
 }
 
-func ToTLSCerts(env *Env) ([]*TLSCerts, error) {
+func ToTLSCerts(env *Env) ([]*TLSCerts, []error) {
 	var certs []*TLSCerts
+	var errors []error
 
-	secrets, err := secrets(env)
-	if err != nil {
-		return nil, fmt.Errorf("error getting secrets for Ingress: %v", err)
-	}
+	secrets, errors := secrets(env)
 	for _, secret := range secrets {
 		cert := string(secret.Data[api_v1.TLSCertKey])
 		newCert := &TLSCerts{
@@ -413,5 +415,5 @@ func ToTLSCerts(env *Env) ([]*TLSCerts, error) {
 		}
 		certs = append(certs, newCert)
 	}
-	return certs, nil
+	return certs, errors
 }

@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
+	v1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/record"
 	negtypes "k8s.io/ingress-gce/pkg/neg/types"
@@ -31,6 +31,7 @@ import (
 
 const (
 	testNegName          = "test-neg-name"
+	testL4NegName        = "test-neg-name-l4"
 	testServiceNamespace = "test-ns"
 	testServiceName      = "test-name"
 	testNamedPort        = "named-Port"
@@ -45,7 +46,7 @@ var (
 				Name:      "default-http-backend",
 				Namespace: "kube-system",
 			},
-			Port: intstr.FromString("http"),
+			Port: v1.ServiceBackendPort{Name: "http"},
 		},
 		TargetPort: "9376",
 	}

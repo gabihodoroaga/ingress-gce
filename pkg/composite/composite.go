@@ -19,6 +19,7 @@ package composite
 
 import (
 	"fmt"
+
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	computealpha "google.golang.org/api/compute/v0.alpha"
@@ -219,5 +220,41 @@ func SetProxyForForwardingRule(gceCloud *gce.Cloud, key *meta.Key, forwardingRul
 		default:
 			return mc.Observe(gceCloud.Compute().GlobalForwardingRules().SetTarget(ctx, key, target))
 		}
+	}
+}
+
+// SetSecurityPolicy sets the cloud armor security policy for a backend service.
+func SetSecurityPolicy(gceCloud *gce.Cloud, backendService *BackendService, securityPolicy string) error {
+	key := meta.GlobalKey(backendService.Name)
+	if backendService.Scope != meta.Global {
+		return fmt.Errorf("cloud armor security policies not supported for %s backend service %s", backendService.Scope, backendService.Name)
+	}
+
+	ctx, cancel := cloud.ContextWithCallTimeout()
+	defer cancel()
+	mc := metrics.NewMetricContext("BackendService", "set_security_policy", key.Region, key.Zone, string(backendService.Version))
+
+	switch backendService.Version {
+	case meta.VersionAlpha:
+		var ref *computealpha.SecurityPolicyReference
+		if securityPolicy != "" {
+			securityPolicyLink := cloud.SelfLink(meta.VersionAlpha, gceCloud.ProjectID(), "securityPolicies", meta.GlobalKey(securityPolicy))
+			ref = &computealpha.SecurityPolicyReference{SecurityPolicy: securityPolicyLink}
+		}
+		return mc.Observe(gceCloud.Compute().AlphaBackendServices().SetSecurityPolicy(ctx, key, ref))
+	case meta.VersionBeta:
+		var ref *computebeta.SecurityPolicyReference
+		if securityPolicy != "" {
+			securityPolicyLink := cloud.SelfLink(meta.VersionBeta, gceCloud.ProjectID(), "securityPolicies", meta.GlobalKey(securityPolicy))
+			ref = &computebeta.SecurityPolicyReference{SecurityPolicy: securityPolicyLink}
+		}
+		return mc.Observe(gceCloud.Compute().BetaBackendServices().SetSecurityPolicy(ctx, key, ref))
+	default:
+		var ref *compute.SecurityPolicyReference
+		if securityPolicy != "" {
+			securityPolicyLink := cloud.SelfLink(meta.VersionGA, gceCloud.ProjectID(), "securityPolicies", meta.GlobalKey(securityPolicy))
+			ref = &compute.SecurityPolicyReference{SecurityPolicy: securityPolicyLink}
+		}
+		return mc.Observe(gceCloud.Compute().BackendServices().SetSecurityPolicy(ctx, key, ref))
 	}
 }

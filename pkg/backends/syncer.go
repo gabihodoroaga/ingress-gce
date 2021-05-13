@@ -22,7 +22,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/ingress-gce/pkg/backends/features"
 	"k8s.io/ingress-gce/pkg/composite"
-	"k8s.io/ingress-gce/pkg/flags"
 	"k8s.io/ingress-gce/pkg/healthchecks"
 	lbfeatures "k8s.io/ingress-gce/pkg/loadbalancers/features"
 	"k8s.io/ingress-gce/pkg/utils"
@@ -82,7 +81,7 @@ func (s *backendSyncer) ensureBackendService(sp utils.ServicePort) error {
 	// Ensure health check for backend service exists.
 	hcLink, err := s.ensureHealthCheck(sp)
 	if err != nil {
-		return fmt.Errorf("error ensuring health check: %v", err)
+		return fmt.Errorf("error ensuring health check: %w", err)
 	}
 
 	// Verify existence of a backend service for the proper port
@@ -119,7 +118,11 @@ func (s *backendSyncer) ensureBackendService(sp utils.ServicePort) error {
 	}
 
 	if sp.BackendConfig != nil {
-		if err := features.EnsureSecurityPolicy(s.cloud, sp, be, beName); err != nil {
+		// Scope is used to validate if cloud armor security policy feature is
+		// available. meta.Key is not needed as security policy supported only for
+		// global backends.
+		be.Scope = scope
+		if err := features.EnsureSecurityPolicy(s.cloud, sp, be); err != nil {
 			return err
 		}
 	}
@@ -134,35 +137,32 @@ func (s *backendSyncer) GC(svcPorts []utils.ServicePort) error {
 		return err
 	}
 
-	// Only GC L7 ILB backends if it's enabled
-	if flags.F.EnableL7Ilb {
-		// TODO(shance): Refactor out empty key field
-		key, err := composite.CreateKey(s.cloud, "", meta.Regional)
-		if err != nil {
-			return fmt.Errorf("error creating l7 ilb key: %v", err)
-		}
-		ilbBackends, err := s.backendPool.List(key, lbfeatures.L7ILBVersions().BackendService)
-		if err != nil {
-			return fmt.Errorf("error listing regional backends: %v", err)
-		}
-		err = s.gc(ilbBackends, knownPorts)
-		if err != nil {
-			return fmt.Errorf("error GCing regional Backends: %v", err)
-		}
+	// TODO(shance): Refactor out empty key field
+	key, err := composite.CreateKey(s.cloud, "", meta.Regional)
+	if err != nil {
+		return fmt.Errorf("error creating l7 ilb key: %w", err)
+	}
+	ilbBackends, err := s.backendPool.List(key, lbfeatures.L7ILBVersions().BackendService)
+	if err != nil {
+		return fmt.Errorf("error listing regional backends: %w", err)
+	}
+	err = s.gc(ilbBackends, knownPorts)
+	if err != nil {
+		return fmt.Errorf("error GCing regional Backends: %w", err)
 	}
 
 	// Requires an empty name field until it is refactored out
-	key, err := composite.CreateKey(s.cloud, "", meta.Global)
+	key, err = composite.CreateKey(s.cloud, "", meta.Global)
 	if err != nil {
-		return fmt.Errorf("error creating l7 ilb key: %v", err)
+		return fmt.Errorf("error creating l7 ilb key: %w", err)
 	}
 	backends, err := s.backendPool.List(key, meta.VersionGA)
 	if err != nil {
-		return fmt.Errorf("error listing backends: %v", err)
+		return fmt.Errorf("error listing backends: %w", err)
 	}
 	err = s.gc(backends, knownPorts)
 	if err != nil {
-		return fmt.Errorf("error GCing Backends: %v", err)
+		return fmt.Errorf("error GCing Backends: %w", err)
 	}
 
 	return nil
@@ -240,7 +240,7 @@ func (s *backendSyncer) ensureHealthCheck(sp utils.ServicePort) (string, error) 
 	if s.prober != nil {
 		probe, err = s.prober.GetProbe(sp)
 		if err != nil {
-			return "", fmt.Errorf("Error getting prober: %v", err)
+			return "", fmt.Errorf("Error getting prober: %w", err)
 		}
 	}
 	return s.healthChecker.SyncServicePort(&sp, probe)

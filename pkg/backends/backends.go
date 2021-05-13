@@ -21,7 +21,6 @@ import (
 	"google.golang.org/api/compute/v1"
 	api_v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/ingress-gce/pkg/backends/features"
 	"k8s.io/ingress-gce/pkg/composite"
 	"k8s.io/ingress-gce/pkg/utils"
@@ -178,7 +177,7 @@ func (b *Backends) Delete(name string, version meta.Version, scope meta.KeyType)
 func (b *Backends) Health(name string, version meta.Version, scope meta.KeyType) (string, error) {
 	be, err := b.Get(name, version, scope)
 	if err != nil {
-		return "Unknown", fmt.Errorf("error getting backend service %s: %v", name, err)
+		return "Unknown", fmt.Errorf("error getting backend service %s: %w", name, err)
 	}
 	if len(be.Backends) == 0 {
 		return "Unknown", fmt.Errorf("no backends found for backend service %q", name)
@@ -186,6 +185,7 @@ func (b *Backends) Health(name string, version meta.Version, scope meta.KeyType)
 
 	// TODO: Include port, ip in the status, since it's in the health info.
 	// TODO (shance) convert to composite types
+	ret := "Unknown"
 	for _, backend := range be.Backends {
 		var hs *compute.BackendServiceGroupHealth
 		switch scope {
@@ -198,17 +198,22 @@ func (b *Backends) Health(name string, version meta.Version, scope meta.KeyType)
 		}
 
 		if err != nil {
-			return "Unknown", fmt.Errorf("error getting health for backend %q: %v", name, err)
+			return "Unknown", fmt.Errorf("error getting health for backend %q: %w", name, err)
 		}
 		if len(hs.HealthStatus) == 0 || hs.HealthStatus[0] == nil {
 			klog.V(3).Infof("backend service %q does not have health status: %v", name, hs.HealthStatus)
 			continue
 		}
 
-		// TODO: State transition are important, not just the latest.
-		return hs.HealthStatus[0].HealthState, nil
+		for _, instanceStatus := range hs.HealthStatus {
+			ret = instanceStatus.HealthState
+			// return immediately with the value if we found at least one healthy instance
+			if ret == "HEALTHY" {
+				return ret, nil
+			}
+		}
 	}
-	return "Unknown", nil
+	return ret, nil
 }
 
 // List lists all backends managed by this controller.
@@ -250,7 +255,7 @@ func (b *Backends) EnsureL4BackendService(name, hcLink, protocol, sessionAffinit
 	if err != nil && !utils.IsNotFoundError(err) {
 		return nil, err
 	}
-	desc, err := utils.MakeL4ILBServiceDescription(nm.String(), "", meta.VersionGA)
+	desc, err := utils.MakeL4ILBServiceDescription(nm.String(), "", meta.VersionGA, false)
 	if err != nil {
 		klog.Warningf("EnsureL4BackendService: Failed to generate description for BackendService %s, err %v",
 			name, err)
@@ -301,36 +306,15 @@ func (b *Backends) EnsureL4BackendService(name, hcLink, protocol, sessionAffinit
 	return composite.GetBackendService(b.cloud, key, meta.VersionGA)
 }
 
-// backendsListEqual asserts that backend lists are equal by group link only
-func backendsListEqual(a, b []*composite.Backend) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	if len(a) == 0 {
-		return true
-	}
-
-	aSet := sets.NewString()
-	for _, v := range a {
-		aSet.Insert(v.Group)
-	}
-	bSet := sets.NewString()
-	for _, v := range b {
-		bSet.Insert(v.Group)
-	}
-
-	return aSet.Equal(bSet)
-}
-
 // backendSvcEqual returns true if the 2 BackendService objects are equal.
 // ConnectionDraining timeout is not checked for equality, if user changes
 // this timeout and no other backendService parameters change, the backend
-// service will not be updated.
+// service will not be updated. The list of backends is not checked either,
+// since that is handled by the neg-linker.
 func backendSvcEqual(a, b *composite.BackendService) bool {
 	return a.Protocol == b.Protocol &&
 		a.Description == b.Description &&
 		a.SessionAffinity == b.SessionAffinity &&
 		a.LoadBalancingScheme == b.LoadBalancingScheme &&
-		utils.EqualStringSets(a.HealthChecks, b.HealthChecks) &&
-		backendsListEqual(a.Backends, b.Backends)
+		utils.EqualStringSets(a.HealthChecks, b.HealthChecks)
 }

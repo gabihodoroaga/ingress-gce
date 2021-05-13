@@ -32,8 +32,8 @@ import (
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/api/networking/v1beta1"
-	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	networkingv1 "k8s.io/api/networking/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,12 +45,15 @@ import (
 	"k8s.io/ingress-gce/cmd/echo/app"
 	"k8s.io/ingress-gce/pkg/annotations"
 	frontendconfigv1beta1 "k8s.io/ingress-gce/pkg/apis/frontendconfig/v1beta1"
+	sav1alpha1 "k8s.io/ingress-gce/pkg/apis/serviceattachment/v1alpha1"
 	negv1beta1 "k8s.io/ingress-gce/pkg/apis/svcneg/v1beta1"
 	"k8s.io/ingress-gce/pkg/e2e/adapter"
 	"k8s.io/ingress-gce/pkg/fuzz"
 	"k8s.io/ingress-gce/pkg/fuzz/features"
 	"k8s.io/ingress-gce/pkg/fuzz/whitebox"
 	negtypes "k8s.io/ingress-gce/pkg/neg/types"
+	"k8s.io/ingress-gce/pkg/psc"
+	"k8s.io/ingress-gce/pkg/utils"
 	"k8s.io/ingress-gce/pkg/utils/common"
 	"k8s.io/klog"
 	utilpointer "k8s.io/utils/pointer"
@@ -125,7 +128,7 @@ func IsRfc1918Addr(addr string) bool {
 
 // UpgradeTestWaitForIngress waits for ingress to stabilize and set sandbox status to stable.
 // Note that this is used only for upgrade tests.
-func UpgradeTestWaitForIngress(s *Sandbox, ing *v1beta1.Ingress, options *WaitForIngressOptions) (*v1beta1.Ingress, error) {
+func UpgradeTestWaitForIngress(s *Sandbox, ing *networkingv1.Ingress, options *WaitForIngressOptions) (*networkingv1.Ingress, error) {
 	ing, err := WaitForIngress(s, ing, nil, options)
 	if err != nil {
 		return nil, err
@@ -137,7 +140,7 @@ func UpgradeTestWaitForIngress(s *Sandbox, ing *v1beta1.Ingress, options *WaitFo
 // WaitForIngress to stabilize.
 // We expect the ingress to be unreachable at first as LB is
 // still programming itself (i.e 404's / 502's)
-func WaitForIngress(s *Sandbox, ing *v1beta1.Ingress, fc *frontendconfigv1beta1.FrontendConfig, options *WaitForIngressOptions) (*v1beta1.Ingress, error) {
+func WaitForIngress(s *Sandbox, ing *networkingv1.Ingress, fc *frontendconfigv1beta1.FrontendConfig, options *WaitForIngressOptions) (*networkingv1.Ingress, error) {
 	err := wait.Poll(ingressPollInterval, ingressPollTimeout, func() (bool, error) {
 		var err error
 		crud := adapter.IngressCRUD{C: s.f.Clientset}
@@ -171,7 +174,7 @@ func WaitForIngress(s *Sandbox, ing *v1beta1.Ingress, fc *frontendconfigv1beta1.
 // validator thinks that http load balancer is configured when https only
 // configuration exists.
 // TODO(smatti): Remove this when the above issue is fixed.
-func WaitForHTTPResourceAnnotations(s *Sandbox, ing *v1beta1.Ingress) (*v1beta1.Ingress, error) {
+func WaitForHTTPResourceAnnotations(s *Sandbox, ing *networkingv1.Ingress) (*networkingv1.Ingress, error) {
 	ingKey := fmt.Sprintf("%s/%s", s.Namespace, ing.Name)
 	klog.Infof("Waiting for HTTP annotations to be added on Ingress %s", ingKey)
 	var err error
@@ -197,7 +200,7 @@ func WaitForHTTPResourceAnnotations(s *Sandbox, ing *v1beta1.Ingress) (*v1beta1.
 
 // WaitForFinalizer waits for Finalizer to be added.
 // Note that this is used only for upgrade tests.
-func WaitForFinalizer(s *Sandbox, ing *v1beta1.Ingress) (*v1beta1.Ingress, error) {
+func WaitForFinalizer(s *Sandbox, ing *networkingv1.Ingress) (*networkingv1.Ingress, error) {
 	ingKey := fmt.Sprintf("%s/%s", s.Namespace, ing.Name)
 	klog.Infof("Waiting for Finalizer to be added for Ingress %s", ingKey)
 	err := wait.Poll(k8sApiPoolInterval, k8sApiPollTimeout, func() (bool, error) {
@@ -224,7 +227,7 @@ func WaitForFinalizer(s *Sandbox, ing *v1beta1.Ingress) (*v1beta1.Ingress, error
 }
 
 // WhiteboxTest retrieves GCP load-balancer for Ingress VIP and runs the whitebox tests.
-func WhiteboxTest(ing *v1beta1.Ingress, fc *frontendconfigv1beta1.FrontendConfig, cloud cloud.Cloud, region string, s *Sandbox) (*fuzz.GCLB, error) {
+func WhiteboxTest(ing *networkingv1.Ingress, fc *frontendconfigv1beta1.FrontendConfig, cloud cloud.Cloud, region string, s *Sandbox) (*fuzz.GCLB, error) {
 	if len(ing.Status.LoadBalancer.Ingress) < 1 {
 		return nil, fmt.Errorf("ingress does not have an IP: %+v", ing.Status)
 	}
@@ -248,7 +251,7 @@ func WhiteboxTest(ing *v1beta1.Ingress, fc *frontendconfigv1beta1.FrontendConfig
 }
 
 // performWhiteboxTests runs the whitebox tests against the Ingress.
-func performWhiteboxTests(s *Sandbox, ing *v1beta1.Ingress, fc *frontendconfigv1beta1.FrontendConfig, gclb *fuzz.GCLB) error {
+func performWhiteboxTests(s *Sandbox, ing *networkingv1.Ingress, fc *frontendconfigv1beta1.FrontendConfig, gclb *fuzz.GCLB) error {
 	validator, err := fuzz.NewIngressValidator(s.ValidatorEnv, ing, fc, whitebox.AllTests, nil, []fuzz.Feature{})
 	if err != nil {
 		return err
@@ -261,7 +264,7 @@ func performWhiteboxTests(s *Sandbox, ing *v1beta1.Ingress, fc *frontendconfigv1
 
 // WaitForIngressDeletion deletes the given ingress and waits for the
 // resources associated with it to be deleted.
-func WaitForIngressDeletion(ctx context.Context, g *fuzz.GCLB, s *Sandbox, ing *v1beta1.Ingress, options *fuzz.GCLBDeleteOptions) error {
+func WaitForIngressDeletion(ctx context.Context, g *fuzz.GCLB, s *Sandbox, ing *networkingv1.Ingress, options *fuzz.GCLBDeleteOptions) error {
 	crud := adapter.IngressCRUD{C: s.f.Clientset}
 	if err := crud.Delete(ing.Namespace, ing.Name); err != nil {
 		return fmt.Errorf("delete(%q) = %v, want nil", ing.Name, err)
@@ -634,7 +637,7 @@ func CheckNameInNegStatus(svc *v1.Service, expectedNegAttrs map[string]string) (
 }
 
 // CheckForAnyFinalizer asserts that an ingress finalizer exists on Ingress.
-func CheckForAnyFinalizer(ing *v1beta1.Ingress) error {
+func CheckForAnyFinalizer(ing *networkingv1.Ingress) error {
 	ingFinalizers := ing.GetFinalizers()
 	if l := len(ingFinalizers); l != 1 {
 		return fmt.Errorf("expected 1 Finalizer but got %d", l)
@@ -646,7 +649,7 @@ func CheckForAnyFinalizer(ing *v1beta1.Ingress) error {
 }
 
 // CheckV1Finalizer asserts that only v1 finalizer exists on Ingress.
-func CheckV1Finalizer(ing *v1beta1.Ingress) error {
+func CheckV1Finalizer(ing *networkingv1.Ingress) error {
 	ingFinalizers := ing.GetFinalizers()
 	if l := len(ingFinalizers); l != 1 {
 		return fmt.Errorf("expected 1 Finalizer but got %d", l)
@@ -658,7 +661,7 @@ func CheckV1Finalizer(ing *v1beta1.Ingress) error {
 }
 
 // CheckV2Finalizer asserts that only v2 finalizer exists on Ingress.
-func CheckV2Finalizer(ing *v1beta1.Ingress) error {
+func CheckV2Finalizer(ing *networkingv1.Ingress) error {
 	ingFinalizers := ing.GetFinalizers()
 	if l := len(ingFinalizers); l != 1 {
 		return fmt.Errorf("expected 1 Finalizer but got %d", l)
@@ -737,7 +740,7 @@ func WaitConfigMapEvents(s *Sandbox, namespace, name string, msgs []string, time
 // by the ingress controller.
 func waitForBackendConfigCRDEstablish(crdClient *apiextensionsclient.Clientset) error {
 	condition := func() (bool, error) {
-		bcCRD, err := crdClient.ApiextensionsV1beta1().CustomResourceDefinitions().Get(context.TODO(), backendConfigCRDName, metav1.GetOptions{})
+		bcCRD, err := crdClient.ApiextensionsV1().CustomResourceDefinitions().Get(context.TODO(), backendConfigCRDName, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				klog.V(3).Infof("CRD %s is not found, retrying", backendConfigCRDName)
@@ -746,7 +749,7 @@ func waitForBackendConfigCRDEstablish(crdClient *apiextensionsclient.Clientset) 
 			return false, err
 		}
 		for _, c := range bcCRD.Status.Conditions {
-			if c.Type == apiextensionsv1beta1.Established && c.Status == apiextensionsv1beta1.ConditionTrue {
+			if c.Type == apiextensionsv1.Established && c.Status == apiextensionsv1.ConditionTrue {
 				return true, nil
 			}
 		}
@@ -953,6 +956,136 @@ func CreateNegCR(s *Sandbox, negName string, servicePort string) error {
 // DeleteNegCR sends a deletion request for the neg cr with the provided negName in the sandbox's namespace
 func DeleteNegCR(s *Sandbox, negName string) error {
 	return s.f.SvcNegClient.NetworkingV1beta1().ServiceNetworkEndpointGroups(s.Namespace).Delete(context.Background(), negName, metav1.DeleteOptions{})
+}
+
+// WaitForServiceAttachment waits until the gce service attachment corresponding to the provided CR name is
+// created and properly configured
+func WaitForServiceAttachment(s *Sandbox, saName string) (string, error) {
+	var gceSAURL string
+	err := wait.Poll(negPollInterval, negPollTimeout, func() (bool, error) {
+		saCR, err := s.f.SAClient.NetworkingV1alpha1().ServiceAttachments(s.Namespace).Get(context.TODO(), saName, metav1.GetOptions{})
+		if saCR == nil || err != nil {
+			return false, fmt.Errorf("failed to get service attachment %s/%s: %v", s.Namespace, saName, err)
+		}
+
+		sa, err := fuzz.GetServiceAttachment(context.TODO(), s.f.Cloud, saCR.Status.ServiceAttachmentURL)
+		if err != nil {
+			klog.Infof("WaitForServiceAttachment() failed to retrieve ServiceAttachment %s: %v", saCR.Status.ServiceAttachmentURL, err)
+			return false, nil
+		}
+
+		if gceSAURL, err = CheckServiceAttachment(sa, saCR); err != nil {
+			klog.Infof("WaitForServiceAttachment() failed checking service attachment %s: %v", saCR.Status.ServiceAttachmentURL, err)
+			return false, nil
+		}
+
+		if err := CheckServiceAttachmentForwardingRule(s, s.f.Cloud, saCR); err != nil {
+			klog.Infof("WaitForServiceAttachment(), forwarding rule on service attachment does not match expected: %q", err)
+			return false, nil
+		}
+		klog.Infof("WaitForServiceAttachment(), found ServiceAttachment %s", gceSAURL)
+		return true, nil
+	})
+	return gceSAURL, err
+}
+
+// WaitForServiceAttachmentDeletion waits until the Service Attachment CR and resource in GCE has been deleted.
+func WaitForServiceAttachmentDeletion(s *Sandbox, saName, gceSAURL string) error {
+	return wait.Poll(negPollInterval, negGCPollTimeout, func() (bool, error) {
+		if !CheckServiceAttachmentCRDeletion(s, saName) {
+			return false, nil
+		}
+
+		if gceSAURL != "" {
+			deleted, err := fuzz.CheckServiceAttachmentDeletion(context.TODO(), s.f.Cloud, gceSAURL)
+			if err != nil {
+				klog.Infof("WaitForServiceAttachment(), errored when checking for service attachment deletion in gce: %q", err)
+			}
+			return deleted, nil
+		}
+		return true, nil
+	})
+}
+
+// CheckServiceAttachmentCRDeletion verifes that the CR does not exist
+func CheckServiceAttachmentCRDeletion(s *Sandbox, saName string) bool {
+	_, err := s.f.SAClient.NetworkingV1alpha1().ServiceAttachments(s.Namespace).Get(context.Background(), saName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return true
+		} else if apierrors.IsNotFound(err) {
+			klog.Infof("CheckDeletedNegCR() failed querying for neg %s/%s: %s", s.Namespace, saName, err)
+			return false
+		}
+	}
+	return false
+}
+
+// CheckServiceAttachment verifes that the CR spec matches the GCE Service Attachment configuration and
+// that the CR's Status was properly populated
+func CheckServiceAttachment(sa *fuzz.ServiceAttachment, cr *sav1alpha1.ServiceAttachment) (string, error) {
+	if err := CheckServiceAttachmentFinalizer(cr); err != nil {
+		return "", fmt.Errorf("failed checking Service Attachment CR %s/%s: %q", cr.Namespace, cr.Name, err)
+	}
+
+	if cr.Status.ServiceAttachmentURL == "" || cr.Status.ForwardingRuleURL == "" {
+		return "", fmt.Errorf("Service Attachment CR %s/%s status is not populated", cr.Namespace, cr.Name)
+	}
+
+	if sa.Alpha.ConnectionPreference != cr.Spec.ConnectionPreference {
+		return "", fmt.Errorf("service attachment %s connection preference does not CR %s/%s", sa.Alpha.ConnectionPreference, cr.Namespace, cr.Name)
+	}
+
+	var subnets []string
+	for _, subnetURL := range sa.Alpha.NatSubnets {
+		resourceID, err := cloud.ParseResourceURL(subnetURL)
+		if err != nil {
+			return "", fmt.Errorf("unparseable subnet url %s in gce service attachment %s", subnetURL, sa.Alpha.Name)
+		}
+		subnets = append(subnets, resourceID.Key.Name)
+	}
+
+	if !utils.EqualStringSets(subnets, cr.Spec.NATSubnets) {
+		return "", fmt.Errorf("subnets in gce service attachment %s does not make CR %s/%s", sa.Alpha.Name, cr.Namespace, cr.Name)
+	}
+	return sa.Alpha.SelfLink, nil
+}
+
+// CheckServiceAttachmentForwardingRule verfies that the forwarding rule used in the GCE Service Attachment creation
+// is the same one created by the Service referenced in the CR
+func CheckServiceAttachmentForwardingRule(s *Sandbox, c cloud.Cloud, cr *sav1alpha1.ServiceAttachment) error {
+
+	svc, err := s.f.Clientset.CoreV1().Services(cr.Namespace).Get(context.TODO(), cr.Spec.ResourceRef.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed getting service %s/%s: %q", s.Namespace, cr.Spec.ResourceRef.Name, err)
+	}
+
+	if len(svc.Status.LoadBalancer.Ingress) != 1 {
+		return fmt.Errorf("expected service to have one loadbalancer, but found %d", len(svc.Status.LoadBalancer.Ingress))
+	}
+
+	fr, err := fuzz.GetForwardingRule(context.TODO(), c, cr.Status.ForwardingRuleURL)
+	if err != nil {
+		return fmt.Errorf("failed getting forwarding rule %s: %q", cr.Status.ForwardingRuleURL, err)
+	}
+
+	if fr.GA.IPAddress != svc.Status.LoadBalancer.Ingress[0].IP {
+		return fmt.Errorf("gclb had IP %s, which does not match IP %s in service %s/%s", fr.GA.IPAddress, svc.Status.LoadBalancer.Ingress[0].IP, svc.Namespace, svc.Name)
+	}
+
+	return nil
+}
+
+// CheckServiceAttachmentFinalizer verifes that the CR has the ServiceAttachment Finalizer
+func CheckServiceAttachmentFinalizer(cr *sav1alpha1.ServiceAttachment) error {
+	finalizers := cr.GetFinalizers()
+	if l := len(finalizers); l != 1 {
+		return fmt.Errorf("expected 1 finalizer on service attachment but got %d", l)
+	}
+	if finalizers[0] != psc.ServiceAttachmentFinalizerKey {
+		return fmt.Errorf("expected service attachment finalizer %q but got %q", psc.ServiceAttachmentFinalizerKey, finalizers[0])
+	}
+	return nil
 }
 
 // Truncate truncates a gce resource name if it exceeds 62 chars

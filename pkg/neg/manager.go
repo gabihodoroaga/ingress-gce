@@ -123,8 +123,9 @@ func newSyncerManager(namer negtypes.NetworkEndpointGroupNamer,
 	}
 }
 
-// EnsureSyncer starts and stops syncers based on the input service ports.
-func (manager *syncerManager) EnsureSyncers(namespace, name string, newPorts negtypes.PortInfoMap) error {
+// EnsureSyncer starts and stops syncers based on the input service ports. Returns the number of
+// syncers that were successfully created and the number of syncers that failed to be created
+func (manager *syncerManager) EnsureSyncers(namespace, name string, newPorts negtypes.PortInfoMap) (int, int, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	start := time.Now()
@@ -147,6 +148,8 @@ func (manager *syncerManager) EnsureSyncers(namespace, name string, newPorts neg
 	klog.V(3).Infof("EnsureSyncer %v/%v: syncing %v ports, removing %v ports, adding %v ports", namespace, name, newPorts, removes, adds)
 
 	errList := []error{}
+	successfulSyncers := 0
+	errorSyncers := 0
 	for svcPort, portInfo := range removes {
 		syncer, ok := manager.syncerMap[manager.getSyncerKey(namespace, name, svcPort, portInfo)]
 		if ok {
@@ -163,7 +166,10 @@ func (manager *syncerManager) EnsureSyncers(namespace, name string, newPorts neg
 		// To reduce the possibility of NEGs being leaked, ensure a SvcNeg CR exists for every
 		// desired port.
 		if err := manager.ensureSvcNegCR(key, portInfo); err != nil {
-			errList = append(errList, fmt.Errorf("failed to ensure svc neg cr %s/%s/%d for existing port: %s", namespace, portInfo.NegName, portInfo.PortTuple.Port, err))
+			errList = append(errList, fmt.Errorf("failed to ensure svc neg cr %s/%s/%d for existing port: %w", namespace, portInfo.NegName, portInfo.PortTuple.Port, err))
+			errorSyncers += 1
+		} else {
+			successfulSyncers += 1
 		}
 	}
 
@@ -177,7 +183,8 @@ func (manager *syncerManager) EnsureSyncers(namespace, name string, newPorts neg
 			// syncer for the NEG until the NEG CR is successfully created. This will reduce the
 			// possibility of invalid states and reduces complexity of garbage collection
 			if err := manager.ensureSvcNegCR(key, portInfo); err != nil {
-				errList = append(errList, fmt.Errorf("failed to ensure svc neg cr %s/%s/%d for new port: %s ", namespace, portInfo.NegName, svcPort.ServicePort, err))
+				errList = append(errList, fmt.Errorf("failed to ensure svc neg cr %s/%s/%d for new port: %w ", namespace, portInfo.NegName, svcPort.ServicePort, err))
+				errorSyncers += 1
 				continue
 			}
 
@@ -206,12 +213,16 @@ func (manager *syncerManager) EnsureSyncers(namespace, name string, newPorts neg
 		if syncer.IsStopped() {
 			if err := syncer.Start(); err != nil {
 				errList = append(errList, err)
+				errorSyncers += 1
+				continue
 			}
 		}
+		successfulSyncers += 1
 	}
 	err := utilerrors.NewAggregate(errList)
 	metrics.PublishNegManagerProcessMetrics(metrics.SyncProcess, err, start)
-	return err
+
+	return successfulSyncers, errorSyncers, err
 }
 
 // StopSyncer stops all syncers for the input service.
@@ -282,7 +293,7 @@ func (manager *syncerManager) GC() error {
 		err = manager.garbageCollectNEG()
 	}
 	if err != nil {
-		err = fmt.Errorf("failed to garbage collect negs: %v", err)
+		err = fmt.Errorf("failed to garbage collect negs: %w", err)
 	}
 	metrics.PublishNegManagerProcessMetrics(metrics.GCProcess, err, start)
 	return err
@@ -344,7 +355,7 @@ func (manager *syncerManager) ensureDeleteSvcNegCR(namespace, negName string) er
 	}
 	obj, exists, err := manager.svcNegLister.GetByKey(fmt.Sprintf("%s/%s", namespace, negName))
 	if err != nil {
-		return fmt.Errorf("failed retrieving neg %s/%s to delete: %s", namespace, negName, err)
+		return fmt.Errorf("failed retrieving neg %s/%s to delete: %w", namespace, negName, err)
 	}
 	if !exists {
 		return nil
@@ -353,7 +364,7 @@ func (manager *syncerManager) ensureDeleteSvcNegCR(namespace, negName string) er
 
 	if neg.GetDeletionTimestamp().IsZero() {
 		if err = manager.svcNegClient.NetworkingV1beta1().ServiceNetworkEndpointGroups(namespace).Delete(context.Background(), negName, metav1.DeleteOptions{}); err != nil {
-			return fmt.Errorf("errored while deleting neg cr %s/%s: %s", negName, namespace, err)
+			return fmt.Errorf("errored while deleting neg cr %s/%s: %w", negName, namespace, err)
 		}
 		klog.V(2).Infof("Deleted neg cr %s/%s", negName, namespace)
 	}
@@ -376,7 +387,7 @@ func (manager *syncerManager) garbageCollectNEG() error {
 	// Compare against svcPortMap and Remove unintended NEGs by best effort
 	negList, err := manager.cloud.AggregatedListNetworkEndpointGroup(meta.VersionGA)
 	if err != nil {
-		return fmt.Errorf("failed to retrieve aggregated NEG list: %v", err)
+		return fmt.Errorf("failed to retrieve aggregated NEG list: %w", err)
 	}
 
 	deleteCandidates := map[string][]string{}
@@ -411,7 +422,7 @@ func (manager *syncerManager) garbageCollectNEG() error {
 	for name, zones := range deleteCandidates {
 		for _, zone := range zones {
 			if err := manager.ensureDeleteNetworkEndpointGroup(name, zone, nil); err != nil {
-				return fmt.Errorf("failed to delete NEG %q in %q: %v", name, zone, err)
+				return fmt.Errorf("failed to delete NEG %q in %q: %w", name, zone, err)
 			}
 		}
 	}
@@ -455,7 +466,7 @@ func (manager *syncerManager) garbageCollectNEGWithCRD() error {
 	var errList []error
 	zones, err := manager.zoneGetter.ListZones()
 	if err != nil {
-		errList = append(errList, fmt.Errorf("failed to get zones during garbage collection: %s", err))
+		errList = append(errList, fmt.Errorf("failed to get zones during garbage collection: %w", err))
 	}
 
 	// deleteNegOrReportErr will attempt to delete the specified NEG resource in the cloud. If an error

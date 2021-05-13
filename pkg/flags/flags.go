@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/component-base/config"
-	"k8s.io/kubernetes/pkg/client/leaderelectionconfig"
+	leaderelectionconfig "k8s.io/component-base/config/options"
 )
 
 const (
@@ -79,6 +79,7 @@ var (
 		NegGCPeriod                      time.Duration
 		NodePortRanges                   PortRanges
 		ResyncPeriod                     time.Duration
+		NumL4Workers                     int
 		RunIngressController             bool
 		RunL4Controller                  bool
 		Version                          bool
@@ -90,13 +91,13 @@ var (
 		EnableBackendConfigHealthCheck bool
 		EnableDeleteUnusedFrontends    bool
 		EnableFrontendConfig           bool
-		EnableL7Ilb                    bool
 		EnableNonGCPMode               bool
 		EnableReadinessReflector       bool
 		EnableV2FrontendNamer          bool
 		FinalizerAdd                   bool // Should have been named Enablexxx.
 		FinalizerRemove                bool // Should have been named Enablexxx.
 		EnablePSC                      bool
+		EnableIngressGAFields          bool
 	}{}
 )
 
@@ -188,6 +189,8 @@ the pod secrets for creating a Kubernetes client.`)
 		`Path to kubeconfig file with authorization and master location information.`)
 	flag.DurationVar(&F.ResyncPeriod, "sync-period", 30*time.Second,
 		`Relist and confirm cloud resources this often.`)
+	flag.IntVar(&F.NumL4Workers, "num-l4-workers", 5,
+		`Number of parallel L4 Service worker goroutines.`)
 	flag.StringVar(&F.WatchNamespace, "watch-namespace", v1.NamespaceAll,
 		`Namespace to watch for Ingress/Services/Endpoints.`)
 	flag.BoolVar(&F.Version, "version", false,
@@ -197,7 +200,7 @@ the pod secrets for creating a Kubernetes client.`)
 	flag.Var(&F.NodePortRanges, "node-port-ranges", `Node port/port-ranges whitelisted for the
 L7 load balancing. CSV values accepted. Example: -node-port-ranges=80,8080,400-500`)
 
-	leaderelectionconfig.BindFlags(&F.LeaderElection.LeaderElectionConfiguration, flag.CommandLine)
+	leaderelectionconfig.BindLeaderElectionFlags(&F.LeaderElection.LeaderElectionConfiguration, flag.CommandLine)
 	flag.StringVar(&F.LeaderElection.LockObjectNamespace, "lock-object-namespace", F.LeaderElection.LockObjectNamespace, "Define the namespace of the lock object.")
 	flag.StringVar(&F.LeaderElection.LockObjectName, "lock-object-name", F.LeaderElection.LockObjectName, "Define the name of the lock object.")
 	flag.DurationVar(&F.NegGCPeriod, "neg-gc-period", 120*time.Second,
@@ -207,8 +210,6 @@ L7 load balancing. CSV values accepted. Example: -node-port-ranges=80,8080,400-5
 		F.FinalizerAdd, "Enable adding Finalizer to Ingress.")
 	flag.BoolVar(&F.FinalizerRemove, "enable-finalizer-remove",
 		F.FinalizerRemove, "Enable removing Finalizer from Ingress.")
-	flag.BoolVar(&F.EnableL7Ilb, "enable-l7-ilb", false,
-		`Optional, whether or not to enable L7-ILB.`)
 	flag.BoolVar(&F.EnableASMConfigMapBasedConfig, "enable-asm-config-map-config", false, "Enable ASMConfigMapBasedConfig")
 	flag.StringVar(&F.ASMConfigMapBasedConfigNamespace, "asm-configmap-based-config-namespace", "kube-system", "ASM Configmap based config: configmap namespace")
 	flag.StringVar(&F.ASMConfigMapBasedConfigCMName, "asm-configmap-based-config-cmname", "ingress-controller-asm-cm-config", "ASM Configmap based config: configmap name")
@@ -219,6 +220,7 @@ L7 load balancing. CSV values accepted. Example: -node-port-ranges=80,8080,400-5
 	flag.BoolVar(&F.RunL4Controller, "run-l4-controller", false, `Optional, whether or not to run L4 Service Controller as part of glbc. If set to true, services of Type:LoadBalancer with Internal annotation will be processed by this controller.`)
 	flag.BoolVar(&F.EnableBackendConfigHealthCheck, "enable-backendconfig-healthcheck", false, "Enable configuration of HealthChecks from the BackendConfig")
 	flag.BoolVar(&F.EnablePSC, "enable-psc", false, "Enable PSC controller")
+	flag.BoolVar(&F.EnableIngressGAFields, "enable-ingress-ga-fields", false, "Enable using Ingress Class GA features")
 }
 
 type RateLimitSpecs struct {

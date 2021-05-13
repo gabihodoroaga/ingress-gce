@@ -20,8 +20,7 @@ import (
 	"errors"
 	"strconv"
 
-	"k8s.io/api/networking/v1beta1"
-	"k8s.io/ingress-gce/pkg/flags"
+	v1 "k8s.io/api/networking/v1"
 )
 
 const (
@@ -115,7 +114,7 @@ type Ingress struct {
 }
 
 // FromIngress extracts the annotations from an Ingress definition.
-func FromIngress(ing *v1beta1.Ingress) *Ingress {
+func FromIngress(ing *v1.Ingress) *Ingress {
 	result := &Ingress{}
 	if ing != nil {
 		result.v = ing.Annotations
@@ -147,10 +146,6 @@ func (ing *Ingress) UseNamedTLS() string {
 }
 
 func (ing *Ingress) StaticIPName() (string, error) {
-	if !flags.F.EnableL7Ilb {
-		return ing.GlobalStaticIPName(), nil
-	}
-
 	globalIp := ing.GlobalStaticIPName()
 	regionalIp := ing.RegionalStaticIPName()
 

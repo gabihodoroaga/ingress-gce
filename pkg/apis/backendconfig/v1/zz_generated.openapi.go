@@ -573,12 +573,12 @@ func schema_pkg_apis_backendconfig_v1_SecurityPolicyConfig(ref common.ReferenceC
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "SecurityPolicyConfig contains configuration for CloudArmor-enabled backends.",
+				Description: "SecurityPolicyConfig contains configuration for CloudArmor-enabled backends. If not specified, the controller will not reconcile the security policy configuration. In other words, users can make changes in GCE without the controller overwriting them.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"name": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Name of the security policy that should be associated.",
+							Description: "Name of the security policy that should be associated. If set to empty, the existing security policy on the backend will be removed.",
 							Type:        []string{"string"},
 							Format:      "",
 						},

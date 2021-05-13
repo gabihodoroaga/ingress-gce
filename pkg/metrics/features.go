@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"k8s.io/api/networking/v1beta1"
+	v1 "k8s.io/api/networking/v1"
 	"k8s.io/ingress-gce/pkg/annotations"
 	frontendconfigv1beta1 "k8s.io/ingress-gce/pkg/apis/frontendconfig/v1beta1"
 	"k8s.io/ingress-gce/pkg/utils"
@@ -99,6 +99,10 @@ const (
 	vmIpNegLocal   = feature("VmIpNegLocal")
 	vmIpNegCluster = feature("VmIpNegCluster")
 	customNamedNeg = feature("CustomNamedNEG")
+	// negInSuccess feature specifies that syncers were created for the Neg
+	negInSuccess = feature("NegInSuccess")
+	// negInError feature specifies that an error occuring in ensuring Neg Syncer
+	negInError = feature("NegInError")
 
 	l4ILBService      = feature("L4ILBService")
 	l4ILBGlobalAccess = feature("L4ILBGlobalAccess")
@@ -108,10 +112,15 @@ const (
 	// l4ILBInInError feature specifies that an error had occurred while creating/
 	// updating GCE Load Balancer.
 	l4ILBInError = feature("L4ILBInError")
+
+	// PSC Features
+	sa          = feature("ServiceAttachments")
+	saInSuccess = feature("ServiceAttachmentInSuccess")
+	saInError   = feature("ServiceAttachmentInError")
 )
 
 // featuresForIngress returns the list of features for given ingress.
-func featuresForIngress(ing *v1beta1.Ingress, fc *frontendconfigv1beta1.FrontendConfig) []feature {
+func featuresForIngress(ing *v1.Ingress, fc *frontendconfigv1beta1.FrontendConfig) []feature {
 	features := []feature{ingress}
 
 	ingKey := fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)
@@ -231,7 +240,7 @@ func featuresForIngress(ing *v1beta1.Ingress, fc *frontendconfigv1beta1.Frontend
 }
 
 // hasSecretBasedCerts returns true if ingress spec contains a secret based cert.
-func hasSecretBasedCerts(ing *v1beta1.Ingress) bool {
+func hasSecretBasedCerts(ing *v1.Ingress) bool {
 	for _, tlsSecret := range ing.Spec.TLS {
 		if tlsSecret.SecretName == "" {
 			continue

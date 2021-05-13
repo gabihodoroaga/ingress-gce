@@ -23,7 +23,7 @@ import (
 
 	istioV1alpha3 "istio.io/api/networking/v1alpha3"
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/api/networking/v1beta1"
+	v1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,7 +42,6 @@ import (
 	"k8s.io/ingress-gce/pkg/annotations"
 	svcnegv1beta1 "k8s.io/ingress-gce/pkg/apis/svcneg/v1beta1"
 	"k8s.io/ingress-gce/pkg/controller/translator"
-	"k8s.io/ingress-gce/pkg/flags"
 	usage "k8s.io/ingress-gce/pkg/metrics"
 	"k8s.io/ingress-gce/pkg/neg/metrics"
 	"k8s.io/ingress-gce/pkg/neg/readiness"
@@ -203,7 +202,7 @@ func NewController(
 	if runIngress {
 		ingressInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
-				addIng := obj.(*v1beta1.Ingress)
+				addIng := obj.(*v1.Ingress)
 				if !utils.IsGLBCIngress(addIng) {
 					klog.V(4).Infof("Ignoring add for ingress %v based on annotation %v", common.NamespacedName(addIng), annotations.IngressClassKey)
 					return
@@ -211,7 +210,7 @@ func NewController(
 				negController.enqueueIngressServices(addIng)
 			},
 			DeleteFunc: func(obj interface{}) {
-				delIng := obj.(*v1beta1.Ingress)
+				delIng := obj.(*v1.Ingress)
 				if !utils.IsGLBCIngress(delIng) {
 					klog.V(4).Infof("Ignoring delete for ingress %v based on annotation %v", common.NamespacedName(delIng), annotations.IngressClassKey)
 					return
@@ -219,8 +218,8 @@ func NewController(
 				negController.enqueueIngressServices(delIng)
 			},
 			UpdateFunc: func(old, cur interface{}) {
-				oldIng := cur.(*v1beta1.Ingress)
-				curIng := cur.(*v1beta1.Ingress)
+				oldIng := cur.(*v1.Ingress)
+				curIng := cur.(*v1.Ingress)
 				if !utils.IsGLBCIngress(curIng) {
 					klog.V(4).Infof("Ignoring update for ingress %v based on annotation %v", common.NamespacedName(curIng), annotations.IngressClassKey)
 					return
@@ -449,7 +448,7 @@ func (c *Controller) processService(key string) error {
 	// merges csmSVCPortInfoMap, because eventually those NEG will sync with the service annotation.
 	// merges destinationRulesPortInfoMap later, because we only want them sync with the DestinationRule annotation.
 	if err := svcPortInfoMap.Merge(csmSVCPortInfoMap); err != nil {
-		return fmt.Errorf("failed to merge CSM service PortInfoMap: %v, error: %v", csmSVCPortInfoMap, err)
+		return fmt.Errorf("failed to merge CSM service PortInfoMap: %v, error: %w", csmSVCPortInfoMap, err)
 	}
 	if c.runL4 {
 		if err := c.mergeVmIpNEGsPortInfo(service, types.NamespacedName{Namespace: namespace, Name: name}, svcPortInfoMap, &negUsage); err != nil {
@@ -463,10 +462,12 @@ func (c *Controller) processService(key string) error {
 		}
 		// Merge destinationRule related NEG after the Service NEGStatus Sync, we don't want DR related NEG status go into service.
 		if err := svcPortInfoMap.Merge(destinationRulesPortInfoMap); err != nil {
-			return fmt.Errorf("failed to merge service ports referenced by Istio:DestinationRule (%v): %v", destinationRulesPortInfoMap, err)
+			return fmt.Errorf("failed to merge service ports referenced by Istio:DestinationRule (%v): %w", destinationRulesPortInfoMap, err)
 		}
+
+		negUsage.SuccessfulNeg, negUsage.ErrorNeg, err = c.manager.EnsureSyncers(namespace, name, svcPortInfoMap)
 		c.collector.SetNegService(key, negUsage)
-		return c.manager.EnsureSyncers(namespace, name, svcPortInfoMap)
+		return err
 	}
 
 	// do not need Neg
@@ -496,7 +497,7 @@ func (c *Controller) mergeIngressPortInfo(service *apiv1.Service, name types.Nam
 		ingressSvcPortTuples := gatherPortMappingUsedByIngress(ings, service)
 		ingressPortInfoMap := negtypes.NewPortInfoMap(name.Namespace, name.Name, ingressSvcPortTuples, c.namer, true, nil)
 		if err := portInfoMap.Merge(ingressPortInfoMap); err != nil {
-			return fmt.Errorf("failed to merge service ports referenced by ingress (%v): %v", ingressPortInfoMap, err)
+			return fmt.Errorf("failed to merge service ports referenced by ingress (%v): %w", ingressPortInfoMap, err)
 		}
 	}
 	return nil
@@ -535,7 +536,7 @@ func (c *Controller) mergeStandaloneNEGsPortInfo(service *apiv1.Service, name ty
 		negUsage.CustomNamedNeg = len(customNames)
 
 		if err := portInfoMap.Merge(negtypes.NewPortInfoMap(name.Namespace, name.Name, exposedNegSvcPort, c.namer /*readinessGate*/, true, customNames)); err != nil {
-			return fmt.Errorf("failed to merge service ports exposed as standalone NEGs (%v) into ingress referenced service ports (%v): %v", exposedNegSvcPort, portInfoMap, err)
+			return fmt.Errorf("failed to merge service ports exposed as standalone NEGs (%v) into ingress referenced service ports (%v): %w", exposedNegSvcPort, portInfoMap, err)
 		}
 	}
 
@@ -571,13 +572,13 @@ func (c *Controller) mergeDefaultBackendServicePortInfoMap(key string, service *
 		return nil
 	}
 
-	scanIngress := func(qualify func(*v1beta1.Ingress) bool) error {
+	scanIngress := func(qualify func(*v1.Ingress) bool) error {
 		for _, m := range c.ingressLister.List() {
-			ing := *m.(*v1beta1.Ingress)
-			if qualify(&ing) && ing.Spec.Backend == nil {
+			ing := *m.(*v1.Ingress)
+			if qualify(&ing) && ing.Spec.DefaultBackend == nil {
 				svcPortTupleSet := make(negtypes.SvcPortTupleSet)
 				svcPortTupleSet.Insert(negtypes.SvcPortTuple{
-					Name:       c.defaultBackendService.ID.Port.String(),
+					Name:       c.defaultBackendService.ID.Port.Name,
 					Port:       c.defaultBackendService.Port,
 					TargetPort: c.defaultBackendService.TargetPort,
 				})
@@ -588,11 +589,8 @@ func (c *Controller) mergeDefaultBackendServicePortInfoMap(key string, service *
 		return nil
 	}
 
-	// process default backend service for L7 ILB
-	if flags.F.EnableL7Ilb {
-		if err := scanIngress(utils.IsGCEL7ILBIngress); err != nil {
-			return err
-		}
+	if err := scanIngress(utils.IsGCEL7ILBIngress); err != nil {
+		return err
 	}
 
 	// process default backend service for L7 XLB
@@ -626,7 +624,7 @@ func (c *Controller) getCSMPortInfoMap(namespace, name string, service *apiv1.Se
 				klog.Warningf("DestinationRule(%s) contains duplicated subset, creating NEGs for the newer ones. %s", namespacedName.Name, err)
 			}
 			if err := destinationRulesPortInfoMap.Merge(destinationRulePortInfoMap); err != nil {
-				return servicePortInfoMap, destinationRulesPortInfoMap, fmt.Errorf("failed to merge service ports referenced by Istio:DestinationRule (%v): %v", destinationRulePortInfoMap, err)
+				return servicePortInfoMap, destinationRulesPortInfoMap, fmt.Errorf("failed to merge service ports referenced by Istio:DestinationRule (%v): %w", destinationRulePortInfoMap, err)
 			}
 			if err = c.syncDestinationRuleNegStatusAnnotation(namespacedName.Namespace, namespacedName.Name, destinationRulePortInfoMap); err != nil {
 				return servicePortInfoMap, destinationRulesPortInfoMap, err
@@ -774,7 +772,7 @@ func (c *Controller) enqueueService(obj interface{}) {
 	c.serviceQueue.Add(key)
 }
 
-func (c *Controller) enqueueIngressServices(ing *v1beta1.Ingress) {
+func (c *Controller) enqueueIngressServices(ing *v1.Ingress) {
 	// enqueue services referenced by ingress
 	keys := gatherIngressServiceKeys(ing)
 	for key := range keys {
@@ -782,7 +780,7 @@ func (c *Controller) enqueueIngressServices(ing *v1beta1.Ingress) {
 	}
 
 	// enqueue default backend service
-	if flags.F.EnableL7Ilb && ing.Spec.Backend == nil {
+	if ing.Spec.DefaultBackend == nil {
 		c.enqueueService(cache.ExplicitKey(c.defaultBackendService.ID.Service.String()))
 	}
 }
@@ -811,7 +809,7 @@ func (c *Controller) gc() {
 
 // gatherPortMappingUsedByIngress returns a map containing port:targetport
 // of all service ports of the service that are referenced by ingresses
-func gatherPortMappingUsedByIngress(ings []v1beta1.Ingress, svc *apiv1.Service) negtypes.SvcPortTupleSet {
+func gatherPortMappingUsedByIngress(ings []v1.Ingress, svc *apiv1.Service) negtypes.SvcPortTupleSet {
 	ingressSvcPortTuples := make(negtypes.SvcPortTupleSet)
 	for _, ing := range ings {
 		if utils.IsGLBCIngress(&ing) {
@@ -836,7 +834,7 @@ func gatherPortMappingUsedByIngress(ings []v1beta1.Ingress, svc *apiv1.Service) 
 }
 
 // gatherIngressServiceKeys returns all service key (formatted as namespace/name) referenced in the ingress
-func gatherIngressServiceKeys(ing *v1beta1.Ingress) sets.String {
+func gatherIngressServiceKeys(ing *v1.Ingress) sets.String {
 	set := sets.NewString()
 	if ing == nil {
 		return set
@@ -848,9 +846,9 @@ func gatherIngressServiceKeys(ing *v1beta1.Ingress) sets.String {
 	return set
 }
 
-func getIngressServicesFromStore(store cache.Store, svc *apiv1.Service) (ings []v1beta1.Ingress) {
+func getIngressServicesFromStore(store cache.Store, svc *apiv1.Service) (ings []v1.Ingress) {
 	for _, m := range store.List() {
-		ing := *m.(*v1beta1.Ingress)
+		ing := *m.(*v1.Ingress)
 		if ing.Namespace != svc.Namespace {
 			continue
 		}

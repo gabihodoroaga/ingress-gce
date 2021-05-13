@@ -28,7 +28,6 @@ import (
 	"k8s.io/ingress-gce/pkg/annotations"
 	"k8s.io/ingress-gce/pkg/composite"
 	"k8s.io/ingress-gce/pkg/events"
-	"k8s.io/ingress-gce/pkg/flags"
 	"k8s.io/ingress-gce/pkg/translator"
 	"k8s.io/ingress-gce/pkg/utils"
 	"k8s.io/ingress-gce/pkg/utils/namer"
@@ -85,7 +84,7 @@ func (l *L7) checkForwardingRule(protocol namer.NamerProtocol, name, proxyLink, 
 		return nil, err
 	}
 
-	isL7ILB := flags.F.EnableL7Ilb && utils.IsGCEL7ILBIngress(l.runtimeInfo.Ingress)
+	isL7ILB := utils.IsGCEL7ILBIngress(l.runtimeInfo.Ingress)
 	tr := translator.NewTranslator(isL7ILB, l.namer)
 	env := &translator.Env{VIP: ip, Network: l.cloud.NetworkURL(), Subnetwork: l.cloud.SubnetworkURL()}
 	fr := tr.ToCompositeForwardingRule(env, protocol, version, proxyLink, description, l.runtimeInfo.StaticIPSubnet)
@@ -245,9 +244,9 @@ func (l *L4) ensureForwardingRule(loadBalancerName, bsLink string, options gce.I
 	ports, _, protocol := utils.GetPortsAndProtocol(l.Service.Spec.Ports)
 	// Create the forwarding rule
 	frDesc, err := utils.MakeL4ILBServiceDescription(utils.ServiceKeyFunc(l.Service.Namespace, l.Service.Name), ipToUse,
-		version)
+		version, false)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to compute description for forwarding rule %s, err: %v", loadBalancerName,
+		return nil, fmt.Errorf("Failed to compute description for forwarding rule %s, err: %w", loadBalancerName,
 			err)
 	}
 
@@ -323,11 +322,11 @@ func (l *L4) deleteForwardingRule(name string, version meta.Version) {
 func Equal(fr1, fr2 *composite.ForwardingRule) (bool, error) {
 	id1, err := cloud.ParseResourceURL(fr1.BackendService)
 	if err != nil {
-		return false, fmt.Errorf("forwardingRulesEqual(): failed to parse backend resource URL from FR, err - %v", err)
+		return false, fmt.Errorf("forwardingRulesEqual(): failed to parse backend resource URL from FR, err - %w", err)
 	}
 	id2, err := cloud.ParseResourceURL(fr2.BackendService)
 	if err != nil {
-		return false, fmt.Errorf("forwardingRulesEqual(): failed to parse resource URL from FR, err - %v", err)
+		return false, fmt.Errorf("forwardingRulesEqual(): failed to parse resource URL from FR, err - %w", err)
 	}
 	return fr1.IPAddress == fr2.IPAddress &&
 		fr1.IPProtocol == fr2.IPProtocol &&
