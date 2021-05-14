@@ -93,8 +93,8 @@ type CDNConfig struct {
 	NegativeCaching             *bool                         `json:"negativeCaching,omitempty"`
 	NegativeCachingPolicy       []*NegativeCachingPolicy      `json:"negativeCachingPolicy,omitempty"`
 	RequestCoalescing           *bool                         `json:"requestCoalescing,omitempty"`
-	ServeWhileStaleSec          *int64                        `json:"serveWhileStaleSec,omitempty"`
-	SignedUrlCacheMaxAgeSec     *int64                        `json:"signedUrlCacheMaxAgeSec,omitempty,string"`
+	ServeWhileStale             *int64                        `json:"serveWhileStale,omitempty"`
+	SignedUrlCacheMaxAgeSec     *int64                        `json:"signedUrlCacheMaxAgeSec,omitempty"`
 	SignedUrlKeyNames           []string                      `json:"signedUrlKeyNames,omitempty"`
 }
 
