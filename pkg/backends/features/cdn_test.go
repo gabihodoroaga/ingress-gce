@@ -237,8 +237,8 @@ func TestEnsureCDN(t *testing.T) {
 							NegativeCachingPolicy: []*bcnf.NegativeCachingPolicy{
 								{Code: 301, Ttl: 1800},
 							},
-							ServeWhileStale: createInt64(86400),
-							RequestCoalescing:  createBool(true),
+							ServeWhileStale:   createInt64(86400),
+							RequestCoalescing: createBool(true),
 							BypassCacheOnRequestHeaders: []*bcnf.BypassCacheOnRequestHeader{
 								{HeaderName: "header"},
 							},
