@@ -175,7 +175,6 @@ func TestAllServicePorts(t *testing.T) {
 	if !reflect.DeepEqual(gotPorts, wantPorts) {
 		t.Errorf("AllServicePorts(%+v) = \n%+v\nwant\n%+v", m, gotPorts, wantPorts)
 	}
-	
 }
 
 func TestAllServicePortsDistinct(t *testing.T) {
