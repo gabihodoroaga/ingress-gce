@@ -296,12 +296,16 @@ if [[ -n $BUILD_AND_PUSH ]]; then
   fi
   # Extract just the URL (with tag) from the `make push` output. `sed -n` makes it
   # not print normally while the `/../../p` makes it print just what it matched.
-  MAKE_COMMAND="cd ../../../; REGISTRY=\"$REGISTRY\" make push 2>&1"
+  MAKE_COMMAND="cd ../../../; REGISTRY=\"$REGISTRY\" make only-push-glbc 2>&1"
   echo "Make command is: ${MAKE_COMMAND}"
   MAKE_PUSH_OUTPUT=$(eval "${MAKE_COMMAND}")
   MAKE_PUSH_CODE=$?
   if [[ $MAKE_PUSH_CODE -eq 0 ]]; then
-    IMAGE_URL=$(head -n 1 $(ls -t .${REGISTRY}_ingress-gce-glbc-*-push | head -1))
+    IMAGE_URL=$(head -n 1 $(ls -t ../../../.*_ingress-gce-glbc-*-push | head -1))
+    if [[ $? -eq 1 ]];
+    then
+        error_exit "Error-bot: Issue geting the image url consider providing --image-url yourself"
+    fi
     echo "Pushed new glbc image to: $IMAGE_URL"
   else
     error_exit "Error-bot: Issue building and pushing image. Make exited with code $MAKE_PUSH_CODE. If a push error, consider setting REGISTRY or providing --image-url yourself. Output from make:\n$MAKE_PUSH_OUTPUT"
