@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"cloud.google.com/go/compute/metadata"
 	apiv1 "k8s.io/api/core/v1"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -71,9 +72,10 @@ type ControllerContext struct {
 
 	Cloud *gce.Cloud
 
-	ClusterNamer  *namer.Namer
-	KubeSystemUID types.UID
-	L4Namer       namer.L4ResourcesNamer
+	ClusterNamer        *namer.Namer
+	KubeSystemUID       types.UID
+	L4Namer             namer.L4ResourcesNamer
+	ClusterUseIPAliases bool
 
 	ControllerContextConfig
 	ASMConfigController *cmconfig.ConfigMapConfigController
@@ -188,6 +190,31 @@ func (ctx *ControllerContext) Init() {
 		}
 	}
 
+	//Q: Is this info available on the master GKE node
+	clusterName, err := metadata.InstanceAttributeValue("cluster-name")
+	if err != nil {
+		klog.Fatalf("failed to get cluster-name from metadata server: %+v", err)
+		return
+	}
+	
+	//Q: Is this info available on the master GKE node
+	clusterZone, err := metadata.InstanceAttributeValue("cluster-location")
+	if err != nil {
+		klog.Fatalf("failed to get cluster-name from metadata server: %+v", err)
+		return
+	}
+
+	//require "container.clusters.get" permission(s) (roles/container.clusterViewer, Kubernetes Engine Cluster Viewer)
+	clusterFullName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s", ctx.Cloud.ProjectID(), clusterZone, clusterName)
+	
+	klog.V(3).Infof("Getting info for cluster %q",clusterFullName)
+	cluster, err := ctx.Cloud.ContainerService().Projects.Locations.Clusters.Get(clusterFullName).Do()
+	if err != nil {
+		klog.Fatalf("Cannot get cluster info %v", err)
+		return
+	}
+	ctx.ClusterUseIPAliases = cluster.IpAllocationPolicy.UseIpAliases
+	// alternative is to get UseIpAliases from the metadata server (must be saved there first) 
 }
 
 func (ctx *ControllerContext) initEnableASM() {

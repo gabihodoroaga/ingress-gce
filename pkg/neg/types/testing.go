@@ -20,13 +20,17 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic/dynamicinformer"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	informerv1 "k8s.io/client-go/informers/core/v1"
 	informernetworking "k8s.io/client-go/informers/networking/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
-	svcnegclient "k8s.io/ingress-gce/pkg/svcneg/client/clientset/versioned"
+	ingcontext "k8s.io/ingress-gce/pkg/context"
+	"k8s.io/ingress-gce/pkg/metrics"
 	negfake "k8s.io/ingress-gce/pkg/svcneg/client/clientset/versioned/fake"
 	informersvcneg "k8s.io/ingress-gce/pkg/svcneg/client/informers/externalversions/svcneg/v1beta1"
 	"k8s.io/ingress-gce/pkg/utils"
@@ -41,32 +45,12 @@ const (
 	clusterID     = "clusterid"
 )
 
-// TestContext provides controller context for testing
-type TestContext struct {
-	KubeClient   kubernetes.Interface
-	SvcNegClient svcnegclient.Interface
-	Cloud        *gce.Cloud
-
-	NegNamer NetworkEndpointGroupNamer
-	L4Namer  namer.L4ResourcesNamer
-
-	IngressInformer  cache.SharedIndexInformer
-	PodInformer      cache.SharedIndexInformer
-	ServiceInformer  cache.SharedIndexInformer
-	NodeInformer     cache.SharedIndexInformer
-	EndpointInformer cache.SharedIndexInformer
-	SvcNegInformer   cache.SharedIndexInformer
-
-	KubeSystemUID types.UID
-	ResyncPeriod  time.Duration
-}
-
-func NewTestContext() *TestContext {
+func NewTestContext() *ingcontext.ControllerContext {
 	kubeClient := fake.NewSimpleClientset()
 	return NewTestContextWithKubeClient(kubeClient)
 }
 
-func NewTestContextWithKubeClient(kubeClient kubernetes.Interface) *TestContext {
+func NewTestContextWithKubeClient(kubeClient kubernetes.Interface) *ingcontext.ControllerContext {
 	negClient := negfake.NewSimpleClientset()
 	fakeGCE := gce.NewFakeGCECloud(gce.DefaultTestClusterValues())
 	MockNetworkEndpointAPIs(fakeGCE)
@@ -74,19 +58,29 @@ func NewTestContextWithKubeClient(kubeClient kubernetes.Interface) *TestContext 
 	clusterNamer := namer.NewNamer(clusterID, "")
 	l4namer := namer.NewL4Namer(kubeSystemUID, clusterNamer)
 
-	return &TestContext{
-		KubeClient:       kubeClient,
-		SvcNegClient:     negClient,
-		Cloud:            fakeGCE,
-		NegNamer:         clusterNamer,
-		L4Namer:          l4namer,
-		IngressInformer:  informernetworking.NewIngressInformer(kubeClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
-		PodInformer:      informerv1.NewPodInformer(kubeClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
-		ServiceInformer:  informerv1.NewServiceInformer(kubeClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
-		EndpointInformer: informerv1.NewEndpointsInformer(kubeClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
-		NodeInformer:     informerv1.NewNodeInformer(kubeClient, resyncPeriod, utils.NewNamespaceIndexer()),
-		SvcNegInformer:   informersvcneg.NewServiceNetworkEndpointGroupInformer(negClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
-		KubeSystemUID:    kubeSystemUID,
-		ResyncPeriod:     resyncPeriod,
+	dynamicSchema := runtime.NewScheme()
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(dynamicSchema)
+	destinationGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1alpha3", Resource: "destinationrules"}
+	drDynamicInformer := dynamicinformer.NewFilteredDynamicInformer(dynamicClient, destinationGVR, apiv1.NamespaceAll, resyncPeriod,
+		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
+		nil)
+		
+	return &ingcontext.ControllerContext{
+		KubeClient:              kubeClient,
+		SvcNegClient:            negClient,
+		DestinationRuleClient:   dynamicClient.Resource(destinationGVR),
+		KubeSystemUID:           kubeSystemUID,
+		Cloud:                   fakeGCE,
+		ClusterNamer:            clusterNamer,
+		IngressInformer:         informernetworking.NewIngressInformer(kubeClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
+		PodInformer:             informerv1.NewPodInformer(kubeClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
+		ServiceInformer:         informerv1.NewServiceInformer(kubeClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
+		EndpointInformer:        informerv1.NewEndpointsInformer(kubeClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
+		DestinationRuleInformer: drDynamicInformer.Informer(),
+		NodeInformer:            informerv1.NewNodeInformer(kubeClient, resyncPeriod, utils.NewNamespaceIndexer()),
+		SvcNegInformer:          informersvcneg.NewServiceNetworkEndpointGroupInformer(negClient, namespace, resyncPeriod, utils.NewNamespaceIndexer()),
+		ControllerMetrics:       metrics.NewControllerMetrics(),
+		L4Namer:                 l4namer,
+		ClusterUseIPAliases:     true,
 	}
 }

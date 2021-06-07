@@ -92,7 +92,7 @@ func (t *Translator) getCachedService(id utils.ServicePortID) (*api_v1.Service, 
 }
 
 // maybeEnableNEG enables NEG on the service port if necessary
-func maybeEnableNEG(sp *utils.ServicePort, svc *api_v1.Service) error {
+func (t *Translator) maybeEnableNEG(sp *utils.ServicePort, svc *api_v1.Service) error {
 	negAnnotation, ok, err := annotations.FromService(svc).NEGAnnotation()
 	if ok && err == nil {
 		sp.NEGEnabled = negAnnotation.NEGEnabledForIngress()
@@ -104,7 +104,16 @@ func maybeEnableNEG(sp *utils.ServicePort, svc *api_v1.Service) error {
 		return errors.ErrBadSvcType{Service: sp.ID.Service, ServiceType: svc.Spec.Type}
 	}
 
+	// If VPC-native routing(aka UseIPAliases, --enable-ip-alias) is not true, NEG cannot be used
+	if sp.NEGEnabled && !t.ctx.ClusterUseIPAliases {
+		klog.Warningf("NEG cannot be enabled for service %q because 'VPC-native' option is not enabled for this cluster.", sp.ID.Service)
+		sp.NEGEnabled = false
+	}
+
 	if sp.L7ILBEnabled {
+		if !t.ctx.ClusterUseIPAliases {
+			return errors.ErrInvalidClusterConfig{ServicePortID: sp.ID}
+		}
 		// L7-ILB Requires NEGs
 		sp.NEGEnabled = true
 	}
@@ -178,7 +187,7 @@ func (t *Translator) getServicePort(id utils.ServicePortID, params *getServicePo
 		BackendNamer: namer,
 	}
 
-	if err := maybeEnableNEG(svcPort, svc); err != nil {
+	if err := t.maybeEnableNEG(svcPort, svc); err != nil {
 		return nil, err
 	}
 

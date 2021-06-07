@@ -78,7 +78,7 @@ const (
 func NewTestSyncerManager(kubeClient kubernetes.Interface) (*syncerManager, *gce.Cloud) {
 	testContext := negtypes.NewTestContextWithKubeClient(kubeClient)
 	manager := newSyncerManager(
-		testContext.NegNamer,
+		testContext.ClusterNamer,
 		record.NewFakeRecorder(100),
 		negtypes.NewAdapter(testContext.Cloud),
 		negtypes.NewFakeZoneGetter(),

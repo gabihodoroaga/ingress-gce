@@ -26,12 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/ingress-gce/pkg/metrics"
-
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/tools/cache"
-
 	istioV1alpha3 "istio.io/api/networking/v1alpha3"
 	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
@@ -42,7 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
+
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/ingress-gce/pkg/annotations"
@@ -114,33 +108,16 @@ var (
 )
 
 func newTestController(kubeClient kubernetes.Interface) *Controller {
+
 	testContext := negtypes.NewTestContextWithKubeClient(kubeClient)
-	dynamicSchema := runtime.NewScheme()
+	testContext.DefaultBackendSvcPort = defaultBackend
+
 	kubeClient.CoreV1().ConfigMaps("kube-system").Create(context.TODO(), &apiv1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "ingress-controller-config-test"}, Data: map[string]string{"enable-asm": "true"}}, metav1.CreateOptions{})
-	dynamicClient := dynamicfake.NewSimpleDynamicClient(dynamicSchema)
-	destinationGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1alpha3", Resource: "destinationrules"}
-	drDynamicInformer := dynamicinformer.NewFilteredDynamicInformer(dynamicClient, destinationGVR, apiv1.NamespaceAll, testContext.ResyncPeriod,
-		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
-		nil)
+
 	controller := NewController(
-		kubeClient,
-		testContext.SvcNegClient,
-		dynamicClient.Resource(destinationGVR),
-		testContext.KubeSystemUID,
-		testContext.IngressInformer,
-		testContext.ServiceInformer,
-		testContext.PodInformer,
-		testContext.NodeInformer,
-		testContext.EndpointInformer,
-		drDynamicInformer.Informer(),
-		testContext.SvcNegInformer,
-		func() bool { return true },
-		metrics.NewControllerMetrics(),
-		testContext.L4Namer,
-		defaultBackend,
+		testContext,
 		negtypes.NewAdapter(testContext.Cloud),
 		negtypes.NewFakeZoneGetter(),
-		testContext.NegNamer,
 		testContext.ResyncPeriod,
 		testContext.ResyncPeriod,
 		// TODO(freehan): enable readiness reflector for unit tests

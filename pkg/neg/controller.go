@@ -41,12 +41,12 @@ import (
 	"k8s.io/cloud-provider/service/helpers"
 	"k8s.io/ingress-gce/pkg/annotations"
 	svcnegv1beta1 "k8s.io/ingress-gce/pkg/apis/svcneg/v1beta1"
+	ingcontext "k8s.io/ingress-gce/pkg/context"
 	"k8s.io/ingress-gce/pkg/controller/translator"
 	usage "k8s.io/ingress-gce/pkg/metrics"
 	"k8s.io/ingress-gce/pkg/neg/metrics"
 	"k8s.io/ingress-gce/pkg/neg/readiness"
 	negtypes "k8s.io/ingress-gce/pkg/neg/types"
-	svcnegclient "k8s.io/ingress-gce/pkg/svcneg/client/clientset/versioned"
 	"k8s.io/ingress-gce/pkg/utils"
 	"k8s.io/ingress-gce/pkg/utils/common"
 	namer2 "k8s.io/ingress-gce/pkg/utils/namer"
@@ -62,6 +62,7 @@ func init() {
 // Controller is network endpoint group controller.
 // It determines whether NEG for a service port is needed, then signals NegSyncerManager to sync it.
 type Controller struct {
+	ctx          *ingcontext.ControllerContext
 	manager      negtypes.NegSyncerManager
 	resyncPeriod time.Duration
 	gcPeriod     time.Duration
@@ -107,24 +108,9 @@ type Controller struct {
 
 // NewController returns a network endpoint group controller.
 func NewController(
-	kubeClient kubernetes.Interface,
-	svcNegClient svcnegclient.Interface,
-	destinationRuleClient dynamic.NamespaceableResourceInterface,
-	kubeSystemUID types.UID,
-	ingressInformer cache.SharedIndexInformer,
-	serviceInformer cache.SharedIndexInformer,
-	podInformer cache.SharedIndexInformer,
-	nodeInformer cache.SharedIndexInformer,
-	endpointInformer cache.SharedIndexInformer,
-	destinationRuleInformer cache.SharedIndexInformer,
-	svcNegInformer cache.SharedIndexInformer,
-	hasSynced func() bool,
-	controllerMetrics *usage.ControllerMetrics,
-	l4Namer namer2.L4ResourcesNamer,
-	defaultBackendService utils.ServicePort,
+	ctx *ingcontext.ControllerContext,
 	cloud negtypes.NetworkEndpointGroupCloud,
 	zoneGetter negtypes.ZoneGetter,
-	namer negtypes.NetworkEndpointGroupNamer,
 	resyncPeriod time.Duration,
 	gcPeriod time.Duration,
 	enableReadinessReflector bool,
@@ -139,7 +125,7 @@ func NewController(
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartLogging(klog.Infof)
 	eventBroadcaster.StartRecordingToSink(&unversionedcore.EventSinkImpl{
-		Interface: kubeClient.CoreV1().Events(""),
+		Interface: ctx.KubeClient.CoreV1().Events(""),
 	})
 	negScheme := runtime.NewScheme()
 	err := scheme.AddToScheme(negScheme)
@@ -154,24 +140,24 @@ func NewController(
 		apiv1.EventSource{Component: "neg-controller"})
 
 	manager := newSyncerManager(
-		namer,
+		ctx.ClusterNamer,
 		recorder,
 		cloud,
 		zoneGetter,
-		svcNegClient,
-		kubeSystemUID,
-		podInformer.GetIndexer(),
-		serviceInformer.GetIndexer(),
-		endpointInformer.GetIndexer(),
-		nodeInformer.GetIndexer(),
-		svcNegInformer.GetIndexer(),
+		ctx.SvcNegClient,
+		ctx.KubeSystemUID,
+		ctx.PodInformer.GetIndexer(),
+		ctx.ServiceInformer.GetIndexer(),
+		ctx.EndpointInformer.GetIndexer(),
+		ctx.NodeInformer.GetIndexer(),
+		ctx.SvcNegInformer.GetIndexer(),
 		enableNonGcpMode)
 
 	var reflector readiness.Reflector
 	if enableReadinessReflector {
 		reflector = readiness.NewReadinessReflector(
-			kubeClient,
-			podInformer.GetIndexer(),
+			ctx.KubeClient,
+			ctx.PodInformer.GetIndexer(),
 			cloud, manager)
 	} else {
 		reflector = &readiness.NoopReflector{}
@@ -179,28 +165,29 @@ func NewController(
 	manager.reflector = reflector
 
 	negController := &Controller{
-		client:                kubeClient,
+		ctx:                   ctx,
+		client:                ctx.KubeClient,
 		manager:               manager,
 		resyncPeriod:          resyncPeriod,
 		gcPeriod:              gcPeriod,
 		recorder:              recorder,
 		zoneGetter:            zoneGetter,
-		namer:                 namer,
-		l4Namer:               l4Namer,
-		defaultBackendService: defaultBackendService,
-		hasSynced:             hasSynced,
-		ingressLister:         ingressInformer.GetIndexer(),
-		serviceLister:         serviceInformer.GetIndexer(),
+		namer:                 ctx.ClusterNamer,
+		l4Namer:               ctx.L4Namer,
+		defaultBackendService: ctx.DefaultBackendSvcPort,
+		hasSynced:             ctx.HasSynced,
+		ingressLister:         ctx.IngressInformer.GetIndexer(),
+		serviceLister:         ctx.ServiceInformer.GetIndexer(),
 		serviceQueue:          workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		endpointQueue:         workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		nodeQueue:             workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		syncTracker:           utils.NewTimeTracker(),
 		reflector:             reflector,
-		collector:             controllerMetrics,
+		collector:             ctx.ControllerMetrics,
 		runL4:                 runL4Controller,
 	}
 	if runIngress {
-		ingressInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		ctx.IngressInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				addIng := obj.(*v1.Ingress)
 				if !utils.IsGLBCIngress(addIng) {
@@ -234,7 +221,7 @@ func NewController(
 			},
 		})
 
-		podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		ctx.PodInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				pod := obj.(*apiv1.Pod)
 				negController.reflector.SyncPod(pod)
@@ -245,7 +232,7 @@ func NewController(
 			},
 		})
 	}
-	serviceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	ctx.ServiceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    negController.enqueueService,
 		DeleteFunc: negController.enqueueService,
 		UpdateFunc: func(old, cur interface{}) {
@@ -253,7 +240,7 @@ func NewController(
 		},
 	})
 
-	endpointInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	ctx.EndpointInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    negController.enqueueEndpoint,
 		DeleteFunc: negController.enqueueEndpoint,
 		UpdateFunc: func(old, cur interface{}) {
@@ -262,7 +249,7 @@ func NewController(
 	})
 
 	if negController.runL4 {
-		nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		ctx.NodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				node := obj.(*apiv1.Node)
 				negController.enqueueNode(node)
@@ -277,15 +264,15 @@ func NewController(
 	if enableAsm {
 		negController.enableASM = enableAsm
 		negController.asmServiceNEGSkipNamespaces = asmServiceNEGSkipNamespaces
-		negController.destinationRuleLister = destinationRuleInformer.GetIndexer()
-		destinationRuleInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		negController.destinationRuleLister = ctx.DestinationRuleInformer.GetIndexer()
+		ctx.DestinationRuleInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc:    negController.enqueueDestinationRule,
 			DeleteFunc: negController.enqueueDestinationRule,
 			UpdateFunc: func(old, cur interface{}) {
 				negController.enqueueDestinationRule(cur)
 			},
 		})
-		negController.destinationRuleClient = destinationRuleClient
+		negController.destinationRuleClient = ctx.DestinationRuleClient
 	}
 	return negController
 }
@@ -493,7 +480,7 @@ func (c *Controller) mergeIngressPortInfo(service *apiv1.Service, name types.Nam
 	}
 
 	// handle NEGs used by ingress
-	if negAnnotation != nil && negAnnotation.NEGEnabledForIngress() {
+	if negAnnotation != nil && negAnnotation.NEGEnabledForIngress() && c.ctx.ClusterUseIPAliases {
 		// Only service ports referenced by ingress are synced for NEG
 		ings := getIngressServicesFromStore(c.ingressLister, service)
 		ingressSvcPortTuples := gatherPortMappingUsedByIngress(ings, service)
@@ -515,7 +502,7 @@ func (c *Controller) mergeStandaloneNEGsPortInfo(service *apiv1.Service, name ty
 		return nil
 	}
 	// handle Exposed Standalone NEGs
-	if negAnnotation != nil && negAnnotation.NEGExposed() {
+	if negAnnotation != nil && negAnnotation.NEGExposed() && c.ctx.ClusterUseIPAliases {
 		knowSvcPortSet := make(negtypes.SvcPortTupleSet)
 		for _, sp := range service.Spec.Ports {
 			knowSvcPortSet.Insert(

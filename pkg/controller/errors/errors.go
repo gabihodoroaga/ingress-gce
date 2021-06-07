@@ -91,3 +91,13 @@ type ErrBackendConfigValidation struct {
 func (e ErrBackendConfigValidation) Error() string {
 	return fmt.Sprintf("BackendConfig %v/%v is not valid: %v", e.BackendConfig.Namespace, e.BackendConfig.Name, e.Err)
 }
+
+// ErrInvalidClusterConfig is returned when the cluster was not configured with VPC-native enabled
+type ErrInvalidClusterConfig struct {
+	utils.ServicePortID
+}
+
+// Error returns the BackendConfig's name and underlying error.
+func (e ErrInvalidClusterConfig) Error() string {
+	return fmt.Sprintf("Cluster was not configured with 'VPC-native routing' enabled. NEG is required for service %q", e.ServicePortID)
+}
