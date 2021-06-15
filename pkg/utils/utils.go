@@ -32,6 +32,7 @@ import (
 	"google.golang.org/api/googleapi"
 	api_v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -43,6 +44,7 @@ import (
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/util/node"
 	"k8s.io/kubernetes/pkg/util/slice"
+	"k8s.io/legacy-cloud-providers/gce"
 )
 
 const (
@@ -176,6 +178,18 @@ func IsNotFoundError(err error) bool {
 // IsForbiddenError returns true if the operation was forbidden
 func IsForbiddenError(err error) bool {
 	return IsHTTPErrorCode(err, http.StatusForbidden)
+}
+
+func GetErrorType(err error) string {
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) {
+		return http.StatusText(gerr.Code)
+	}
+	var k8serr *k8serrors.StatusError
+	if errors.As(err, &k8serr) {
+		return "k8s " + string(k8serrors.ReasonForError(k8serr))
+	}
+	return ""
 }
 
 // PrettyJson marshals an object in a human-friendly format.
@@ -621,4 +635,22 @@ func NewStringPointer(s string) *string {
 // NewInt64Pointer returns a pointer to the provided int64 literal
 func NewInt64Pointer(i int64) *int64 {
 	return &i
+}
+
+// GetBasePath returns the compute API endpoint with the `projects/<project-id>` element
+// compute API v0.36 changed basepath and dropped the `projects/` suffix, therefore suffix
+// must be added back when generating compute resource urls.
+func GetBasePath(cloud *gce.Cloud) string {
+	basePath := cloud.ComputeServices().GA.BasePath
+
+	if basePath[len(basePath)-1] != '/' {
+		basePath += "/"
+	}
+	// Trim  the trailing /, so that split will not consider the last element as empty
+	elements := strings.Split(strings.TrimSuffix(basePath, "/"), "/")
+
+	if elements[len(elements)-1] != "projects" {
+		return fmt.Sprintf("%sprojects/%s/", basePath, cloud.ProjectID())
+	}
+	return fmt.Sprintf("%s%s/", basePath, cloud.ProjectID())
 }

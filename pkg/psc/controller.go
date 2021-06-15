@@ -25,7 +25,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
-	alpha "google.golang.org/api/compute/v0.alpha"
+	beta "google.golang.org/api/compute/v0.beta"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,7 +36,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/ingress-gce/pkg/annotations"
-	sav1alpha1 "k8s.io/ingress-gce/pkg/apis/serviceattachment/v1alpha1"
+	sav1beta1 "k8s.io/ingress-gce/pkg/apis/serviceattachment/v1beta1"
 	"k8s.io/ingress-gce/pkg/composite"
 	"k8s.io/ingress-gce/pkg/context"
 	"k8s.io/ingress-gce/pkg/psc/metrics"
@@ -105,6 +105,12 @@ func NewController(ctx *context.ControllerContext) *Controller {
 	ctx.SAInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: controller.enqueueServiceAttachment,
 		UpdateFunc: func(old, cur interface{}) {
+			curSA := cur.(*sav1beta1.ServiceAttachment)
+			oldSA := old.(*sav1beta1.ServiceAttachment)
+
+			if !shouldProcess(oldSA, curSA) {
+				return
+			}
 			controller.enqueueServiceAttachment(cur)
 		},
 	})
@@ -171,7 +177,7 @@ func (c *Controller) handleErr(err error, key interface{}) {
 	if obj, exists, err := c.svcAttachmentLister.GetByKey(key.(string)); err != nil {
 		klog.Warningf("failed to retrieve service attachment %q from the store: %q", key.(string), err)
 	} else if exists {
-		svcAttachment := obj.(*sav1alpha1.ServiceAttachment)
+		svcAttachment := obj.(*sav1beta1.ServiceAttachment)
 		c.recorder(svcAttachment.Namespace).Eventf(svcAttachment, v1.EventTypeWarning, "ProcessServiceAttachmentFailed", eventMsg)
 	}
 	c.svcAttachmentQueue.AddRateLimited(key)
@@ -219,9 +225,10 @@ func (c *Controller) processServiceAttachment(key string) error {
 		return nil
 	}
 	klog.V(2).Infof("Processing Service attachment %s/%s", namespace, name)
+	defer klog.V(4).Infof("Finished processing service attachment %s/%s", namespace, name)
 
-	svcAttachment := obj.(*sav1alpha1.ServiceAttachment)
-	var updatedCR *sav1alpha1.ServiceAttachment
+	svcAttachment := obj.(*sav1beta1.ServiceAttachment)
+	var updatedCR *sav1beta1.ServiceAttachment
 	updatedCR, err = c.ensureSAFinalizer(svcAttachment)
 	if err != nil {
 		return fmt.Errorf("Errored adding finalizer on ServiceAttachment CR %s/%s: %s", namespace, name, err)
@@ -242,13 +249,14 @@ func (c *Controller) processServiceAttachment(key string) error {
 
 	saName := c.saNamer.ServiceAttachment(namespace, name, string(updatedCR.UID))
 	desc := sautils.ServiceAttachmentDesc{URL: updatedCR.SelfLink}
-	gceSvcAttachment := &alpha.ServiceAttachment{
+	gceSvcAttachment := &beta.ServiceAttachment{
 		ConnectionPreference:   svcAttachment.Spec.ConnectionPreference,
 		Name:                   saName,
 		NatSubnets:             subnetURLs,
 		ProducerForwardingRule: frURL,
 		Region:                 c.cloud.Region(),
 		Description:            desc.String(),
+		EnableProxyProtocol:    updatedCR.Spec.ProxyProtocol,
 	}
 
 	gceSAKey, err := composite.CreateKey(c.cloud, saName, meta.Regional)
@@ -256,7 +264,7 @@ func (c *Controller) processServiceAttachment(key string) error {
 		return fmt.Errorf("failed to create key for GCE Service Attachment: %q", err)
 	}
 
-	existingSA, err := c.cloud.Compute().AlphaServiceAttachments().Get(context2.Background(), gceSAKey)
+	existingSA, err := c.cloud.Compute().BetaServiceAttachments().Get(context2.Background(), gceSAKey)
 	if err != nil && !utils.IsHTTPErrorCode(err, http.StatusNotFound) {
 		return fmt.Errorf("failed querying for GCE Service Attachment: %q", err)
 	}
@@ -267,12 +275,14 @@ func (c *Controller) processServiceAttachment(key string) error {
 		if err != nil {
 			return fmt.Errorf("invalid Service Attachment Update: %q", err)
 		}
-		klog.V(4).Infof("Finished processing service attachment %s/%s", namespace, name)
-		return nil
+
+		_, err = c.updateServiceAttachmentStatus(updatedCR, gceSAKey)
+		klog.V(2).Infof("Updated Service Attachment %s/%s status after update", updatedCR.Namespace, updatedCR.Name)
+		return err
 	}
 
 	klog.V(2).Infof("Creating service attachment %s", saName)
-	if err = c.cloud.Compute().AlphaServiceAttachments().Insert(context2.Background(), gceSAKey, gceSvcAttachment); err != nil {
+	if err = c.cloud.Compute().BetaServiceAttachments().Insert(context2.Background(), gceSAKey, gceSvcAttachment); err != nil {
 		return fmt.Errorf("failed to create GCE Service Attachment: %q", err)
 	}
 	klog.V(2).Infof("Created service attachment %s", saName)
@@ -294,7 +304,7 @@ func (c *Controller) garbageCollectServiceAttachments() {
 	}()
 	crs := c.svcAttachmentLister.List()
 	for _, obj := range crs {
-		sa := obj.(*sav1alpha1.ServiceAttachment)
+		sa := obj.(*sav1beta1.ServiceAttachment)
 		if sa.GetDeletionTimestamp().IsZero() {
 			continue
 		}
@@ -311,7 +321,7 @@ func (c *Controller) garbageCollectServiceAttachments() {
 // deleteServiceAttachment attemps to delete the GCE Service Attachment resource
 // that corresponds to the provided CR. If successful, the finalizer on the CR
 // will be removed.
-func (c *Controller) deleteServiceAttachment(sa *sav1alpha1.ServiceAttachment) {
+func (c *Controller) deleteServiceAttachment(sa *sav1beta1.ServiceAttachment) {
 	start := time.Now()
 	// NOTE: Error will be used to send metrics about whether the sync loop was successful
 	// Please reuse and set err before returning
@@ -419,7 +429,7 @@ func (c *Controller) getSubnetURLs(subnets []string) ([]string, error) {
 
 // updateServiceAttachmentStatus updates the CR's status with the GCE Service Attachment URL
 // and the producer forwarding rule
-func (c *Controller) updateServiceAttachmentStatus(cr *sav1alpha1.ServiceAttachment, gceSAKey *meta.Key) (*sav1alpha1.ServiceAttachment, error) {
+func (c *Controller) updateServiceAttachmentStatus(cr *sav1beta1.ServiceAttachment, gceSAKey *meta.Key) (*sav1beta1.ServiceAttachment, error) {
 	gceSA, err := c.cloud.Compute().AlphaServiceAttachments().Get(context2.Background(), gceSAKey)
 	if err != nil {
 		return cr, fmt.Errorf("failed to query GCE Service Attachment: %q", err)
@@ -429,17 +439,28 @@ func (c *Controller) updateServiceAttachmentStatus(cr *sav1alpha1.ServiceAttachm
 	updatedSA.Status.ServiceAttachmentURL = gceSA.SelfLink
 	updatedSA.Status.ForwardingRuleURL = gceSA.ProducerForwardingRule
 
+	var consumers []sav1beta1.ConsumerForwardingRule
+	for _, c := range gceSA.ConsumerForwardingRules {
+		consumers = append(consumers, sav1beta1.ConsumerForwardingRule{
+			ForwardingRuleURL: c.ForwardingRule,
+			Status:            c.Status,
+		})
+	}
+
+	updatedSA.Status.ConsumerForwardingRules = consumers
+	updatedSA.Status.LastModifiedTimestamp = metav1.Now()
+
 	klog.V(2).Infof("Updating Service Attachment %s/%s status", cr.Namespace, cr.Name)
 	return c.patchServiceAttachment(cr, updatedSA)
 }
 
 // patchServiceAttachment patches the originalSA CR to the desired updatedSA CR
-func (c *Controller) patchServiceAttachment(originalSA, updatedSA *sav1alpha1.ServiceAttachment) (*sav1alpha1.ServiceAttachment, error) {
+func (c *Controller) patchServiceAttachment(originalSA, updatedSA *sav1beta1.ServiceAttachment) (*sav1beta1.ServiceAttachment, error) {
 	patchBytes, err := patch.MergePatchBytes(originalSA, updatedSA)
 	if err != nil {
 		return originalSA, err
 	}
-	return c.saClient.NetworkingV1alpha1().ServiceAttachments(originalSA.Namespace).Patch(context2.Background(), updatedSA.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	return c.saClient.NetworkingV1beta1().ServiceAttachments(originalSA.Namespace).Patch(context2.Background(), updatedSA.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
 }
 
 // ensureGCEDeleteServiceAttachment deletes the GCE Service Attachment resource with provided
@@ -450,7 +471,7 @@ func (c *Controller) ensureDeleteGCEServiceAttachment(name string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create key for service attachment %q", name)
 	}
-	_, err = c.cloud.Compute().AlphaServiceAttachments().Get(context2.Background(), saKey)
+	_, err = c.cloud.Compute().BetaServiceAttachments().Get(context2.Background(), saKey)
 	if err != nil {
 		if utils.IsHTTPErrorCode(err, http.StatusNotFound) || utils.IsHTTPErrorCode(err, http.StatusBadRequest) {
 			return nil
@@ -458,12 +479,12 @@ func (c *Controller) ensureDeleteGCEServiceAttachment(name string) error {
 		return fmt.Errorf("failed querying for service attachment %q: %q", name, err)
 	}
 
-	return c.cloud.Compute().AlphaServiceAttachments().Delete(context2.Background(), saKey)
+	return c.cloud.Compute().BetaServiceAttachments().Delete(context2.Background(), saKey)
 }
 
 // ensureSAFinalizer ensures that the Service Attachment finalizer exists on the provided
 // CR. If it does not, the CR will be patched with the finalizer
-func (c *Controller) ensureSAFinalizer(saCR *sav1alpha1.ServiceAttachment) (*sav1alpha1.ServiceAttachment, error) {
+func (c *Controller) ensureSAFinalizer(saCR *sav1beta1.ServiceAttachment) (*sav1beta1.ServiceAttachment, error) {
 	if len(saCR.Finalizers) != 0 {
 		for _, finalizer := range saCR.Finalizers {
 			if finalizer == ServiceAttachmentFinalizerKey {
@@ -483,7 +504,7 @@ func (c *Controller) ensureSAFinalizer(saCR *sav1alpha1.ServiceAttachment) (*sav
 
 // ensureSAFinalizerRemoved ensures that the Service Attachment finalizer is removed
 // from the provided CR.
-func (c *Controller) ensureSAFinalizerRemoved(cr *sav1alpha1.ServiceAttachment) error {
+func (c *Controller) ensureSAFinalizerRemoved(cr *sav1beta1.ServiceAttachment) error {
 	updatedCR := cr.DeepCopy()
 	updatedCR.Finalizers = slice.RemoveString(updatedCR.Finalizers, ServiceAttachmentFinalizerKey, nil)
 	_, err := c.patchServiceAttachment(cr, updatedCR)
@@ -506,7 +527,7 @@ func validateResourceReference(ref v1.TypedLocalObjectReference) error {
 // validateUpdate will validate whether ServiceAttachment matches the GCE Service Attachment
 // resource. If not, validateUpdate will return an error, since GCE Service Attachments cannot
 // be updated after creation
-func validateUpdate(existingSA, desiredSA *alpha.ServiceAttachment) error {
+func validateUpdate(existingSA, desiredSA *beta.ServiceAttachment) error {
 	if existingSA.ConnectionPreference != desiredSA.ConnectionPreference {
 		return fmt.Errorf("serviceAttachment connection preference cannot be updated from %s to %s", existingSA.ConnectionPreference, desiredSA.ConnectionPreference)
 	}
@@ -547,6 +568,32 @@ func validateUpdate(existingSA, desiredSA *alpha.ServiceAttachment) error {
 		}
 	}
 	return nil
+}
+
+// shouldProcess checks if service attachment should be processed or not.
+// It will ignore status or type meta only updates but will return true for periodic enqueues
+func shouldProcess(old, cur *sav1beta1.ServiceAttachment) bool {
+	if cur.GetDeletionTimestamp() != nil {
+		klog.V(4).Infof("Deletion timestamp is set, skipping service attachment %s/%s", cur.Namespace, cur.Name)
+		return false
+	}
+
+	// If spec changed, the ServiceAttachment should be processed.
+	if !reflect.DeepEqual(old.Spec, cur.Spec) {
+		klog.V(4).Infof("Spec has changed, queuing service attachment %s/%s", cur.Namespace, cur.Name)
+		return true
+	}
+
+	if reflect.DeepEqual(old.Status, cur.Status) {
+		// Periodic enqueues where nothing changed should be processed to update Status
+		klog.V(4).Infof("Periodic sync, queuing service attachment %s/%s", cur.Namespace, cur.Name)
+		return true
+	}
+
+	// If Status changed, update was done by the controller and further processing is unnecessary.
+	// Status change results in a resource version change, so do not check for metadata changes
+	klog.V(4).Infof("Status only update, skipping service attachment %s/%s", cur.Namespace, cur.Name)
+	return false
 }
 
 // SvcAttachmentKeyFunc provides the service attachment key used
