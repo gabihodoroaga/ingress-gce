@@ -14,18 +14,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package metrics
+package descutils
 
-// PSCState tracks service attachment and psc feautre usage
-type PSCState struct {
-	// InSuccess specifies if the ServiceAttachment was successfully created
-	InSuccess bool
+import "fmt"
+
+func GenerateClusterLink(name, location string, regional bool) string {
+	if name == "" || location == "" {
+		return ""
+	}
+
+	locType := "zones"
+	if regional {
+		locType = "regions"
+	}
+	return fmt.Sprintf("/%s/%s/clusters/%s", locType, location, name)
 }
 
-// PSCMetricsCollector is used to publish usage metrics
-type PSCMetricsCollector interface {
-	SetServiceAttachment(saKey string, state PSCState)
-	DeleteServiceAttachment(saKey string)
-	SetService(serviceKey string)
-	DeleteService(serviceKey string)
+func GenerateK8sResourceLink(namespace, resourceType, resourceName string) string {
+	return fmt.Sprintf("/namespaces/%s/%s/%s", namespace, resourceType, resourceName)
 }
