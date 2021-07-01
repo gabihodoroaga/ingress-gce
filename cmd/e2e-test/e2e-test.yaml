@@ -59,7 +59,17 @@ metadata:
 spec:
   containers:
   - name: ingress-e2e
-    image: gcr.io/k8s-ingress-image-push/ingress-gce-e2e-test-amd64:master
+    image: gcr.io/codelab1-244421/ingress-gce-e2e-test-amd64:v1-custom
     imagePullPolicy: Always
+    env:
+    - name: GOOGLE_APPLICATION_CREDENTIALS
+      value: /var/secrets/google/key.json
+    volumeMounts:
+      - mountPath: /var/secrets/google
+        name: google-cloud-key
   restartPolicy: Never
   serviceAccount: ingress-e2e-test
+  volumes:
+  - name: google-cloud-key
+    secret:
+      secretName: glbc-gcp-key

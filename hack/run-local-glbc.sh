@@ -4,7 +4,8 @@
 #
 # Files touched: /tmp/kubectl-proxy.log /tmp/glbc.log
 
-GOOGLE_APPLICATION_CREDENTIALS="${HOME}/.config/gcloud/application_default_credentials.json"
+# Take in consideration if the valriable is already defined
+#GOOGLE_APPLICATION_CREDENTIALS="${HOME}/.config/gcloud/application_default_credentials.json"
 
 if [ ! -r ${GOOGLE_APPLICATION_CREDENTIALS} ]; then
     echo "You must login your application default credentials"
@@ -12,10 +13,10 @@ if [ ! -r ${GOOGLE_APPLICATION_CREDENTIALS} ]; then
     exit 1
 fi
 
-GCECONF=${GCECONF:-/tmp/gce.conf}
+GCECONF=${GCECONF:-${PWD}/../tmp/gce.conf}
 GLBC=${GLBC:-./glbc}
 PORT=${PORT:-7127}
-V=${V:-3}
+V=${V:-4}
 
 echo "GCECONF=${GCECONF} GLBC=${GLBC} PORT=${PORT} V=${V}"
 
@@ -24,9 +25,9 @@ if [ ! -x "${GLBC}" ]; then
     exit 1
 fi
 
-echo "$(date) start" >> /tmp/kubectl-proxy.log
+echo "$(date) start" >> ${PWD}/../tmp/kubectl-proxy.log
 kubectl proxy --port="${PORT}" \
-    >> /tmp/kubectl-proxy.log &
+    >> ${PWD}/../tmp/kubectl-proxy.log &
 
 PROXY_PID=$!
 cleanup() {
@@ -39,8 +40,10 @@ kubectl apply -f docs/deploy/resources/default-http-backend.yaml
 
 sleep 2 # Wait for proxy to start up
 ${GLBC} \
+    --v=${V} \
     --apiserver-host=http://localhost:${PORT} \
     --running-in-cluster=false \
-    --logtostderr --v=${V} \
+    --logtostderr \
     --config-file-path=${GCECONF} \
-    2>&1 | tee -a /tmp/glbc.log
+    --enable-backendconfig-healthcheck \
+    2>&1 | tee -a ${PWD}/../tmp/glbc.log

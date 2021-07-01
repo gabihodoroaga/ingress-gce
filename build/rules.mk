@@ -110,7 +110,7 @@ $(GO_BINARIES): build-dirs
 	@docker run                                                            \
 	    --rm                                                               \
 	    --sig-proxy=true                                                   \
-	    -u $$(id -u):$$(id -g)                                             \
+	    -u root                                             \
 	    -v $$(pwd)/.go:/go                                                 \
 	    -v $$(pwd):/go/src/$(PKG)                                          \
 	    -v $$(pwd)/bin/$(ARCH):/go/bin/linux_$(ARCH)                       \
