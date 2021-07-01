@@ -822,7 +822,7 @@ func ({{$type.VarName}} *{{$type.Name}}) To{{$version}}() (*compute{{$extension}
 		if {{$lower}}.CdnPolicy.CacheKeyPolicy != nil {
 		{{$lower}}.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
 		}
-		{{$lower}}.CdnPolicy.ForceSendFields = []string{"NegativeCaching", "RequestCoalescing","SignedUrlCacheMaxAgeSec","ServeWhileStale"}
+		{{$lower}}.CdnPolicy.ForceSendFields = append({{$type.VarName}}.CdnPolicy.ForceSendFields, []string{"NegativeCaching", "RequestCoalescing","SignedUrlCacheMaxAgeSec","ServeWhileStale"}...)
 	}
 	if {{$lower}}.Iap != nil {
 		{{$lower}}.Iap.ForceSendFields = []string{"Enabled", "Oauth2ClientId", "Oauth2ClientSecret"}

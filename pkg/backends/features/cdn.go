@@ -17,6 +17,7 @@ limitations under the License.
 package features
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -68,6 +69,27 @@ func sliceEqual(a, b []string) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+func negativeCachingPolicyEqual(x, y []*composite.BackendServiceCdnPolicyNegativeCachingPolicy) bool {
+	if len(x) != len(y) {
+		return false
+	}
+	diff := make(map[string]int, len(x))
+	for _, v := range x {
+		diff[fmt.Sprintf("%d-%d", v.Code, v.Ttl)]++
+	}
+	for _, v := range y {
+		key := fmt.Sprintf("%d-%d", v.Code, v.Ttl)
+		if _, ok := diff[key]; !ok {
+			return false
+		}
+		diff[key]--
+		if diff[key] == 0 {
+			delete(diff, key)
+		}
+	}
+	return len(diff) == 0
+}
+
 // applyCDNSettings applies the CDN settings specified in the BackendConfig
 // to the passed in compute.BackendService. A GCE API call still needs to be
 // made to actually persist the changes.
@@ -112,15 +134,23 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 			changed = true
 		}
 
-		if !sliceEqual(cacheKeyPolicy.QueryStringBlacklist, beCacheKeyPolicy.QueryStringBlacklist) {
-			klog.V(3).Infof("CdnPolicy.CacheKeyPolicy.QueryStringBlacklist property will be updated from %v to %v", beCacheKeyPolicy.QueryStringBlacklist, cacheKeyPolicy.QueryStringBlacklist)
-			beCacheKeyPolicy.QueryStringBlacklist = cacheKeyPolicy.QueryStringBlacklist
+		var queryStringBlacklist []string
+		if beCacheKeyPolicy.IncludeQueryString {
+			queryStringBlacklist = cacheKeyPolicy.QueryStringBlacklist
+		}
+		if !sliceEqual(queryStringBlacklist, beCacheKeyPolicy.QueryStringBlacklist) {
+			klog.V(3).Infof("CdnPolicy.CacheKeyPolicy.QueryStringBlacklist property will be updated from %v to %v", beCacheKeyPolicy.QueryStringBlacklist, queryStringBlacklist)
+			beCacheKeyPolicy.QueryStringBlacklist = queryStringBlacklist
 			changed = true
 		}
 
-		if !sliceEqual(cacheKeyPolicy.QueryStringWhitelist, beCacheKeyPolicy.QueryStringWhitelist) {
-			klog.V(3).Infof("CdnPolicy.CacheKeyPolicy.QueryStringWhitelist property will be updated from %v to %v", beCacheKeyPolicy.QueryStringWhitelist, cacheKeyPolicy.QueryStringWhitelist)
-			beCacheKeyPolicy.QueryStringWhitelist = cacheKeyPolicy.QueryStringWhitelist
+		var queryStringWhitelist []string
+		if beCacheKeyPolicy.IncludeQueryString {
+			queryStringWhitelist = cacheKeyPolicy.QueryStringWhitelist
+		}
+		if !sliceEqual(queryStringWhitelist, beCacheKeyPolicy.QueryStringWhitelist) {
+			klog.V(3).Infof("CdnPolicy.CacheKeyPolicy.QueryStringWhitelist property will be updated from %v to %v", beCacheKeyPolicy.QueryStringWhitelist, queryStringWhitelist)
+			beCacheKeyPolicy.QueryStringWhitelist = queryStringWhitelist
 			changed = true
 		}
 	} else if !reflect.DeepEqual(be.CdnPolicy.CacheKeyPolicy, defaultCdnPolicy.CacheKeyPolicy) {
@@ -172,6 +202,9 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 		if be.CdnPolicy.MaxTtl != *cdnConfig.MaxTtl {
 			klog.V(3).Infof("CdnPolicy.MaxTtl property will be updated from %v to %v", be.CdnPolicy.MaxTtl, *cdnConfig.MaxTtl)
 			be.CdnPolicy.MaxTtl = *cdnConfig.MaxTtl
+			if be.CdnPolicy.MaxTtl == 0 {
+				be.CdnPolicy.ForceSendFields = append(be.CdnPolicy.ForceSendFields, "MaxTtl")
+			}
 			changed = true
 		}
 	} else if be.CdnPolicy.MaxTtl != defaultCdnPolicy.MaxTtl {
@@ -180,13 +213,16 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 		changed = true
 	}
 
-	// if USE_ORIGIN_HEADERS DefaultTtl must be ignored
+	// if USE_ORIGIN_HEADERS ClientTtl must be ignored
 	if be.CdnPolicy.CacheMode == "USE_ORIGIN_HEADERS" {
 		be.CdnPolicy.ClientTtl = 0
 	} else if cdnConfig.ClientTtl != nil {
 		if be.CdnPolicy.ClientTtl != *cdnConfig.ClientTtl {
 			klog.V(3).Infof("CdnPolicy.ClientTtl property will be updated from %v to %v", be.CdnPolicy.ClientTtl, *cdnConfig.ClientTtl)
 			be.CdnPolicy.ClientTtl = *cdnConfig.ClientTtl
+			if be.CdnPolicy.ClientTtl == 0 {
+				be.CdnPolicy.ForceSendFields = append(be.CdnPolicy.ForceSendFields, "ClientTtl")
+			}
 			changed = true
 		}
 	} else if be.CdnPolicy.ClientTtl != defaultCdnPolicy.ClientTtl {
@@ -202,6 +238,9 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 		if be.CdnPolicy.DefaultTtl != *cdnConfig.DefaultTtl {
 			klog.V(3).Infof("CdnPolicy.DefaultTtl property will be updated from %v to %v", be.CdnPolicy.DefaultTtl, *cdnConfig.DefaultTtl)
 			be.CdnPolicy.DefaultTtl = *cdnConfig.DefaultTtl
+			if be.CdnPolicy.DefaultTtl == 0 {
+				be.CdnPolicy.ForceSendFields = append(be.CdnPolicy.ForceSendFields, "DefaultTtl")
+			}
 			changed = true
 		}
 	} else if be.CdnPolicy.DefaultTtl != defaultCdnPolicy.DefaultTtl {
@@ -222,6 +261,31 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 		changed = true
 	}
 
+	negativeCachingPolicy := []*composite.BackendServiceCdnPolicyNegativeCachingPolicy{}
+	if be.CdnPolicy.NegativeCaching {
+		for _, policyRef := range cdnConfig.NegativeCachingPolicy {
+			negativeCachingPolicy = append(
+				negativeCachingPolicy,
+				&composite.BackendServiceCdnPolicyNegativeCachingPolicy{
+					Code: policyRef.Code,
+					Ttl:  policyRef.Ttl,
+				},
+			)
+		}
+	}
+	if (len(negativeCachingPolicy) == 0 &&
+		len(be.CdnPolicy.NegativeCachingPolicy) > 0) ||
+		(len(negativeCachingPolicy) > 0 &&
+			!negativeCachingPolicyEqual(be.CdnPolicy.NegativeCachingPolicy, negativeCachingPolicy)) {
+		klog.V(3).Infof("CdnPolicy.NegativeCachingPolicy property will be updated from %s to %s", prettyPrint(be.CdnPolicy.NegativeCachingPolicy), prettyPrint(negativeCachingPolicy))
+		if len(negativeCachingPolicy) == 0 {
+			be.CdnPolicy.NegativeCachingPolicy = nil
+		} else {
+			be.CdnPolicy.NegativeCachingPolicy = negativeCachingPolicy
+		}
+		changed = true
+	}
+
 	if cdnConfig.SignedUrlCacheMaxAgeSec != nil {
 		if be.CdnPolicy.SignedUrlCacheMaxAgeSec != *cdnConfig.SignedUrlCacheMaxAgeSec {
 			klog.V(3).Infof("CdnPolicy.SignedUrlCacheMaxAgeSec property will be updated from %v to %v", be.CdnPolicy.SignedUrlCacheMaxAgeSec, *cdnConfig.SignedUrlCacheMaxAgeSec)
@@ -237,29 +301,6 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 	if !sliceEqual(cdnConfig.SignedUrlKeyNames, be.CdnPolicy.SignedUrlKeyNames) {
 		klog.V(3).Infof("CdnPolicy.SignedUrlKeyNames property will be updated from %+v to %+v", be.CdnPolicy.SignedUrlKeyNames, cdnConfig.SignedUrlKeyNames)
 		be.CdnPolicy.SignedUrlKeyNames = cdnConfig.SignedUrlKeyNames
-		changed = true
-	}
-
-	negativeCachingPolicy := []*composite.BackendServiceCdnPolicyNegativeCachingPolicy{}
-	for _, policyRef := range cdnConfig.NegativeCachingPolicy {
-		negativeCachingPolicy = append(
-			negativeCachingPolicy,
-			&composite.BackendServiceCdnPolicyNegativeCachingPolicy{
-				Code: policyRef.Code,
-				Ttl:  policyRef.Ttl,
-			},
-		)
-	}
-	if (len(negativeCachingPolicy) == 0 &&
-		len(be.CdnPolicy.NegativeCachingPolicy) > 0) ||
-		(len(negativeCachingPolicy) > 0 &&
-			!reflect.DeepEqual(be.CdnPolicy.NegativeCachingPolicy, negativeCachingPolicy)) {
-		klog.V(3).Infof("CdnPolicy.NegativeCachingPolicy property will be updated from %s to %s", prettyPrint(be.CdnPolicy.NegativeCachingPolicy), prettyPrint(negativeCachingPolicy))
-		if len(negativeCachingPolicy) == 0 {
-			be.CdnPolicy.NegativeCachingPolicy = nil
-		} else {
-			be.CdnPolicy.NegativeCachingPolicy = negativeCachingPolicy
-		}
 		changed = true
 	}
 
