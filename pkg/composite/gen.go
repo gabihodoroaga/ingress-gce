@@ -4152,7 +4152,7 @@ func (backendService *BackendService) ToAlpha() (*computealpha.BackendService, e
 		if alpha.CdnPolicy.CacheKeyPolicy != nil {
 			alpha.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
 		}
-		alpha.CdnPolicy.ForceSendFields = []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}
+		alpha.CdnPolicy.ForceSendFields = append(backendService.CdnPolicy.ForceSendFields, []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}...)
 	}
 	if alpha.Iap != nil {
 		alpha.Iap.ForceSendFields = []string{"Enabled", "Oauth2ClientId", "Oauth2ClientSecret"}
@@ -4180,7 +4180,7 @@ func (backendService *BackendService) ToBeta() (*computebeta.BackendService, err
 		if beta.CdnPolicy.CacheKeyPolicy != nil {
 			beta.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
 		}
-		beta.CdnPolicy.ForceSendFields = []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}
+		beta.CdnPolicy.ForceSendFields = append(backendService.CdnPolicy.ForceSendFields, []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}...)
 	}
 	if beta.Iap != nil {
 		beta.Iap.ForceSendFields = []string{"Enabled", "Oauth2ClientId", "Oauth2ClientSecret"}
@@ -4208,7 +4208,7 @@ func (backendService *BackendService) ToGA() (*compute.BackendService, error) {
 		if ga.CdnPolicy.CacheKeyPolicy != nil {
 			ga.CdnPolicy.CacheKeyPolicy.ForceSendFields = []string{"IncludeHost", "IncludeProtocol", "IncludeQueryString", "QueryStringBlacklist", "QueryStringWhitelist"}
 		}
-		ga.CdnPolicy.ForceSendFields = []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}
+		ga.CdnPolicy.ForceSendFields = append(backendService.CdnPolicy.ForceSendFields, []string{"NegativeCaching", "RequestCoalescing", "SignedUrlCacheMaxAgeSec", "ServeWhileStale"}...)
 	}
 	if ga.Iap != nil {
 		ga.Iap.ForceSendFields = []string{"Enabled", "Oauth2ClientId", "Oauth2ClientSecret"}

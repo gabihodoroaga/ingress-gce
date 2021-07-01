@@ -511,6 +511,45 @@ func TestEnsureCDNCacheMode(t *testing.T) {
 			}).build(),
 		},
 		{
+			desc: "cacheMode when CACHE_ALL_STATIC, ttl equals zero",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.CacheMode = &cacheAllStatic
+				cdn.ClientTtl = createInt64(0)
+				cdn.DefaultTtl = createInt64(0)
+				cdn.MaxTtl = createInt64(0)
+			}).build(),
+			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheMode = useOriginHeaders
+			}).build(),
+			updateExpected: true,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheMode = cacheAllStatic
+				cdn.ClientTtl = 0
+				cdn.DefaultTtl = 0
+				cdn.MaxTtl = 0
+				cdn.ForceSendFields = []string{"MaxTtl", "ClientTtl", "DefaultTtl"}
+			}).build(),
+		},
+		{
+			desc: "cacheMode when FORCE_CACHE_ALL, ttl equals zero",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.CacheMode = &forceCacheAll
+				cdn.ClientTtl = createInt64(0)
+				cdn.DefaultTtl = createInt64(0)
+			}).build(),
+			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheMode = cacheAllStatic
+			}).build(),
+			updateExpected: true,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheMode = forceCacheAll
+				cdn.ClientTtl = 0
+				cdn.DefaultTtl = 0
+				cdn.MaxTtl = 0
+				cdn.ForceSendFields = []string{"ClientTtl", "DefaultTtl"}
+			}).build(),
+		},
+		{
 			desc: "when not specified, restore to default",
 			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
 			}).build(),
@@ -596,6 +635,37 @@ func TestEnsureCDNCacheKeyPolicy(t *testing.T) {
 			}).build(),
 		},
 		{
+			desc: "update QueryStringWhitelist,ignore for IncludeQueryString false",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.CachePolicy = &bcnf.CacheKeyPolicy{IncludeHost: true, IncludeProtocol: true,
+					IncludeQueryString:   false,
+					QueryStringWhitelist: []string{"value1"}}
+			}).build(),
+			be:             newDefaultBackendService().build(),
+			updateExpected: true,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheKeyPolicy.IncludeQueryString = false
+				cdn.CacheKeyPolicy.QueryStringWhitelist = nil
+			}).build(),
+		},
+		{
+			desc: "update QueryStringWhitelist,ignore for IncludeQueryString false, clear existing",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.CachePolicy = &bcnf.CacheKeyPolicy{IncludeHost: true, IncludeProtocol: true,
+					IncludeQueryString:   false,
+					QueryStringWhitelist: []string{"value1"}}
+			}).build(),
+			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheKeyPolicy.IncludeQueryString = true
+				cdn.CacheKeyPolicy.QueryStringWhitelist = []string{"value1"}
+			}).build(),
+			updateExpected: true,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheKeyPolicy.IncludeQueryString = false
+				cdn.CacheKeyPolicy.QueryStringWhitelist = nil
+			}).build(),
+		},
+		{
 			desc: "update QueryStringBlacklist empty slice", // queryStringBlacklist: []
 			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
 				cdn.CachePolicy = &bcnf.CacheKeyPolicy{IncludeHost: true, IncludeProtocol: true, IncludeQueryString: true,
@@ -615,6 +685,50 @@ func TestEnsureCDNCacheKeyPolicy(t *testing.T) {
 			updateExpected: true,
 			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
 				cdn.CacheKeyPolicy.QueryStringBlacklist = []string{"value1"}
+			}).build(),
+		},
+		{
+			desc: "update QueryStringBlacklist,ignore for IncludeQueryString false",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.CachePolicy = &bcnf.CacheKeyPolicy{IncludeHost: true, IncludeProtocol: true, IncludeQueryString: false,
+					QueryStringBlacklist: []string{"value1"}}
+			}).build(),
+			be:             newDefaultBackendService().build(),
+			updateExpected: true,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheKeyPolicy.IncludeQueryString = false
+				cdn.CacheKeyPolicy.QueryStringBlacklist = nil
+			}).build(),
+		},
+		{
+			desc: "update QueryStringBlacklist,ignore for IncludeQueryString false, clear existing",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.CachePolicy = &bcnf.CacheKeyPolicy{IncludeHost: true, IncludeProtocol: true, IncludeQueryString: false,
+					QueryStringBlacklist: []string{"value1"}}
+			}).build(),
+			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheKeyPolicy.IncludeQueryString = true
+				cdn.CacheKeyPolicy.QueryStringBlacklist = []string{"value1"}
+			}).build(),
+			updateExpected: true,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheKeyPolicy.IncludeQueryString = false
+				cdn.CacheKeyPolicy.QueryStringBlacklist = nil
+			}).build(),
+		},
+		{
+			desc: "ignore for IncludeQueryString false",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.CachePolicy = &bcnf.CacheKeyPolicy{IncludeHost: true, IncludeProtocol: true, IncludeQueryString: false,
+					QueryStringBlacklist: []string{"value1"},
+					QueryStringWhitelist: []string{"value2"}}
+			}).build(),
+			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheKeyPolicy.IncludeQueryString = false
+			}).build(),
+			updateExpected: false,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.CacheKeyPolicy.IncludeQueryString = false
 			}).build(),
 		},
 		{
@@ -708,6 +822,39 @@ func TestEnsureCDNNegativeCaching(t *testing.T) {
 			}).build(),
 		},
 		{
+			desc: "update NegativeCaching value false,ignore NegativeCachingPolicy",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.NegativeCaching = createBool(false)
+				cdn.NegativeCachingPolicy = []*bcnf.NegativeCachingPolicy{
+					{Code: 302, Ttl: 1800},
+				}
+			}).build(),
+			be:             newDefaultBackendService().build(),
+			updateExpected: true,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.NegativeCaching = false
+			}).build(),
+		},
+		{
+			desc: "update NegativeCaching value false,clear NegativeCachingPolicy",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.NegativeCaching = createBool(false)
+				cdn.NegativeCachingPolicy = []*bcnf.NegativeCachingPolicy{
+					{Code: 302, Ttl: 1800},
+				}
+			}).build(),
+			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.NegativeCaching = true
+				cdn.NegativeCachingPolicy = []*composite.BackendServiceCdnPolicyNegativeCachingPolicy{
+					{Code: 301, Ttl: 0},
+				}
+			}).build(),
+			updateExpected: true,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.NegativeCaching = false
+			}).build(),
+		},
+		{
 			desc: "update NegativeCaching value true",
 			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
 				cdn.NegativeCaching = createBool(true)
@@ -764,7 +911,7 @@ func TestEnsureCDNNegativeCaching(t *testing.T) {
 			beAfter:        newDefaultBackendService().build(),
 		},
 		{
-			desc: "when not specified, restore to default",
+			desc: "when not specified, restore to defaults, clear policy",
 			sp:   newServicePort().build(),
 			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
 				cdn.NegativeCachingPolicy = []*composite.BackendServiceCdnPolicyNegativeCachingPolicy{
@@ -775,13 +922,35 @@ func TestEnsureCDNNegativeCaching(t *testing.T) {
 			beAfter:        newDefaultBackendService().build(),
 		},
 		{
-			desc: "when not specified, restore to default",
+			desc: "when not specified, restore to defaults",
 			sp:   newServicePort().build(),
 			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
 				cdn.NegativeCaching = false
 			}).build(),
 			updateExpected: true,
 			beAfter:        newDefaultBackendService().build(),
+		},
+		{
+			desc: "same values different order, no update",
+			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
+				cdn.NegativeCachingPolicy = []*bcnf.NegativeCachingPolicy{
+					{Code: 404, Ttl: 600},
+					{Code: 301, Ttl: 1800},
+				}
+			}).build(),
+			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.NegativeCachingPolicy = []*composite.BackendServiceCdnPolicyNegativeCachingPolicy{
+					{Code: 301, Ttl: 1800},
+					{Code: 404, Ttl: 600},
+				}
+			}).build(),
+			updateExpected: false,
+			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
+				cdn.NegativeCachingPolicy = []*composite.BackendServiceCdnPolicyNegativeCachingPolicy{
+					{Code: 301, Ttl: 1800},
+					{Code: 404, Ttl: 600},
+				}
+			}).build(),
 		},
 	}
 
