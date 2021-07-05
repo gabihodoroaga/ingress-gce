@@ -298,12 +298,6 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 		changed = true
 	}
 
-	if !sliceEqual(cdnConfig.SignedUrlKeyNames, be.CdnPolicy.SignedUrlKeyNames) {
-		klog.V(3).Infof("CdnPolicy.SignedUrlKeyNames property will be updated from %+v to %+v", be.CdnPolicy.SignedUrlKeyNames, cdnConfig.SignedUrlKeyNames)
-		be.CdnPolicy.SignedUrlKeyNames = cdnConfig.SignedUrlKeyNames
-		changed = true
-	}
-
 	bypassCacheOnRequestHeaders := []*composite.BackendServiceCdnPolicyBypassCacheOnRequestHeader{}
 	for _, policyRef := range cdnConfig.BypassCacheOnRequestHeaders {
 		bypassCacheOnRequestHeaders = append(
@@ -325,5 +319,7 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 		}
 		changed = true
 	}
+
+	// changes for SignedUrlKeys are handled outside this module
 	return
 }

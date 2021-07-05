@@ -243,7 +243,6 @@ func TestEnsureCDN(t *testing.T) {
 								{HeaderName: "header"},
 							},
 							SignedUrlCacheMaxAgeSec: createInt64(3600),
-							SignedUrlKeyNames:       []string{"key1"},
 						},
 					},
 				},
@@ -364,7 +363,6 @@ func TestEnsureCDN(t *testing.T) {
 				cdn.ServeWhileStale = createInt64(defCdn.ServeWhileStale)
 				cdn.RequestCoalescing = createBool(defCdn.RequestCoalescing)
 				cdn.SignedUrlCacheMaxAgeSec = createInt64(defCdn.SignedUrlCacheMaxAgeSec)
-				cdn.SignedUrlKeyNames = defCdn.SignedUrlKeyNames
 			}).build(),
 			be:             newDefaultBackendService().build(),
 			updateExpected: false,
@@ -963,19 +961,6 @@ func TestEnsureCDNSignedUrl(t *testing.T) {
 		{
 			desc: "update SignedUrlCacheMaxAgeSec value",
 			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
-				cdn.SignedUrlKeyNames = []string{"key1"}
-			}).build(),
-			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
-				cdn.SignedUrlKeyNames = []string{"key2"}
-			}).build(),
-			updateExpected: true,
-			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
-				cdn.SignedUrlKeyNames = []string{"key1"}
-			}).build(),
-		},
-		{
-			desc: "update SignedUrlCacheMaxAgeSec value",
-			sp: newServicePort().setProp(func(cdn *bcnf.CDNConfig) {
 				cdn.SignedUrlCacheMaxAgeSec = createInt64(1800)
 			}).build(),
 			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
@@ -985,15 +970,6 @@ func TestEnsureCDNSignedUrl(t *testing.T) {
 			beAfter: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
 				cdn.SignedUrlCacheMaxAgeSec = 1800
 			}).build(),
-		},
-		{
-			desc: "when not specified, restore to default",
-			sp:   newServicePort().build(),
-			be: newDefaultBackendService().setProp(func(cdn *composite.BackendServiceCdnPolicy) {
-				cdn.SignedUrlKeyNames = []string{"key1"}
-			}).build(),
-			updateExpected: true,
-			beAfter:        newDefaultBackendService().build(),
 		},
 		{
 			desc: "when not specified, restore to default",
