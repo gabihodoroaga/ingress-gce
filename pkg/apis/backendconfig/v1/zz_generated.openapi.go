@@ -43,6 +43,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"k8s.io/ingress-gce/pkg/apis/backendconfig/v1.OAuthClientCredentials":     schema_pkg_apis_backendconfig_v1_OAuthClientCredentials(ref),
 		"k8s.io/ingress-gce/pkg/apis/backendconfig/v1.SecurityPolicyConfig":       schema_pkg_apis_backendconfig_v1_SecurityPolicyConfig(ref),
 		"k8s.io/ingress-gce/pkg/apis/backendconfig/v1.SessionAffinityConfig":      schema_pkg_apis_backendconfig_v1_SessionAffinityConfig(ref),
+		"k8s.io/ingress-gce/pkg/apis/backendconfig/v1.SignedUrlKey":               schema_pkg_apis_backendconfig_v1_SignedUrlKey(ref),
 	}
 }
 
@@ -155,7 +156,7 @@ func schema_pkg_apis_backendconfig_v1_BypassCacheOnRequestHeader(ref common.Refe
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CDNConfig contains configuration for how requests containing specific request headers bypass the cache, even if the content was previously cached.",
+				Description: "BypassCacheOnRequestHeader contains configuration for how requests containing specific request headers bypass the cache, even if the content was previously cached.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"headerName": {
@@ -261,14 +262,13 @@ func schema_pkg_apis_backendconfig_v1_CDNConfig(ref common.ReferenceCallback) co
 							Format: "int64",
 						},
 					},
-					"signedUrlKeyNames": {
+					"signedUrlKeys": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Type:   []string{"string"},
-										Format: "",
+										Ref: ref("k8s.io/ingress-gce/pkg/apis/backendconfig/v1.SignedUrlKey"),
 									},
 								},
 							},
@@ -279,7 +279,7 @@ func schema_pkg_apis_backendconfig_v1_CDNConfig(ref common.ReferenceCallback) co
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/ingress-gce/pkg/apis/backendconfig/v1.BypassCacheOnRequestHeader", "k8s.io/ingress-gce/pkg/apis/backendconfig/v1.CacheKeyPolicy", "k8s.io/ingress-gce/pkg/apis/backendconfig/v1.NegativeCachingPolicy"},
+			"k8s.io/ingress-gce/pkg/apis/backendconfig/v1.BypassCacheOnRequestHeader", "k8s.io/ingress-gce/pkg/apis/backendconfig/v1.CacheKeyPolicy", "k8s.io/ingress-gce/pkg/apis/backendconfig/v1.NegativeCachingPolicy", "k8s.io/ingress-gce/pkg/apis/backendconfig/v1.SignedUrlKey"},
 	}
 }
 
@@ -511,7 +511,7 @@ func schema_pkg_apis_backendconfig_v1_NegativeCachingPolicy(ref common.Reference
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CDNConfig contains configuration for how negative caching is applied.",
+				Description: "NegativeCachingPolicy contains configuration for how negative caching is applied.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"code": {
@@ -607,6 +607,40 @@ func schema_pkg_apis_backendconfig_v1_SessionAffinityConfig(ref common.Reference
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"integer"},
 							Format: "int64",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_backendconfig_v1_SignedUrlKey(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SignedUrlKey represents a customer-supplied Signing Key used by Cloud CDN Signed URLs",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"keyName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "KeyName: Name of the key. The name must be 1-63 characters long, and comply with RFC1035. Specifically, the name must be 1-63 characters long and match the regular expression `[a-z]([-a-z0-9]*[a-z0-9])?` which means the first character must be a lowercase letter, and all following characters must be a dash, lowercase letter, or digit, except the last character, which cannot be a dash.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"keyValue": {
+						SchemaProps: spec.SchemaProps{
+							Description: "KeyValue: 128-bit key value used for signing the URL. The key value must be a valid RFC 4648 Section 5 base64url encoded string.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"secretName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "The name of a k8s secret which stores the 128-bit key value used for signing the URL. The key value must be a valid RFC 4648 Section 5 base64url encoded string",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},

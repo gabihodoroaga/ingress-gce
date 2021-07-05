@@ -95,10 +95,10 @@ type CDNConfig struct {
 	RequestCoalescing           *bool                         `json:"requestCoalescing,omitempty"`
 	ServeWhileStale             *int64                        `json:"serveWhileStale,omitempty"`
 	SignedUrlCacheMaxAgeSec     *int64                        `json:"signedUrlCacheMaxAgeSec,omitempty"`
-	SignedUrlKeyNames           []string                      `json:"signedUrlKeyNames,omitempty"`
+	SignedUrlKeys               []*SignedUrlKey               `json:"signedUrlKeys,omitempty"`
 }
 
-// CDNConfig contains configuration for how requests containing specific request
+// BypassCacheOnRequestHeader contains configuration for how requests containing specific request
 // headers bypass the cache, even if the content was previously cached.
 // +k8s:openapi-gen=true
 type BypassCacheOnRequestHeader struct {
@@ -107,7 +107,7 @@ type BypassCacheOnRequestHeader struct {
 	HeaderName string `json:"headerName,omitempty"`
 }
 
-// CDNConfig contains configuration for how negative caching is applied.
+// NegativeCachingPolicy contains configuration for how negative caching is applied.
 // +k8s:openapi-gen=true
 type NegativeCachingPolicy struct {
 	// The HTTP status code to define a TTL against. Only HTTP status codes
@@ -141,6 +141,28 @@ type CacheKeyPolicy struct {
 	// parameters are excluded. Either specify QueryStringBlacklist or
 	// QueryStringWhitelist, but not both.
 	QueryStringWhitelist []string `json:"queryStringWhitelist,omitempty"`
+}
+
+// SignedUrlKey represents a customer-supplied Signing Key used by
+// Cloud CDN Signed URLs
+// +k8s:openapi-gen=true
+type SignedUrlKey struct {
+	// KeyName: Name of the key. The name must be 1-63 characters long, and
+	// comply with RFC1035. Specifically, the name must be 1-63 characters
+	// long and match the regular expression `[a-z]([-a-z0-9]*[a-z0-9])?`
+	// which means the first character must be a lowercase letter, and all
+	// following characters must be a dash, lowercase letter, or digit,
+	// except the last character, which cannot be a dash.
+	KeyName string `json:"keyName,omitempty"`
+
+	// KeyValue: 128-bit key value used for signing the URL. The key value
+	// must be a valid RFC 4648 Section 5 base64url encoded string.
+	KeyValue string `json:"keyValue,omitempty"`
+
+	// The name of a k8s secret which stores the 128-bit key value
+	// used for signing the URL. The key value must be a valid RFC 4648 Section 5
+	// base64url encoded string
+	SecretName string `json:"secretName,omitempty"`
 }
 
 // SecurityPolicyConfig contains configuration for CloudArmor-enabled backends.

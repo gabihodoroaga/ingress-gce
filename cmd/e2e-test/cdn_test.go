@@ -657,7 +657,7 @@ func TestCDNRequestCoalescing(t *testing.T) {
 	})
 }
 
-func TestCDNSignedUrlCacheMaxAgeSec(t *testing.T) {
+func TestCDNSignedUrls(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -666,7 +666,7 @@ func TestCDNSignedUrlCacheMaxAgeSec(t *testing.T) {
 		ingressName    = "cdn-ingress-1"
 	)
 
-	Framework.RunWithSandbox("CDN signed url cache max age in seconds tests", t, func(t *testing.T, s *e2e.Sandbox) {
+	Framework.RunWithSandbox("CDN signed urls tests", t, func(t *testing.T, s *e2e.Sandbox) {
 
 		ing, err := setupIngress(s, ingressName, serviceName1, backendconfig1)
 		if err != nil {
@@ -684,9 +684,15 @@ func TestCDNSignedUrlCacheMaxAgeSec(t *testing.T) {
 					SetCDNConfig(&backendconfig.CDNConfig{
 						Enabled:                 true,
 						SignedUrlCacheMaxAgeSec: createInt64(1234),
+						SignedUrlKeys: []*backendconfig.SignedUrlKey{
+							{KeyName: "key1", KeyValue: "MH5PnJa2HCKM232GxJ3z0g=="},
+							{KeyName: "key2", KeyValue: "MH5PnJa2HCKM232GxJ3z0g=="},
+							{KeyName: "key3", KeyValue: "MH5PnJa2HCKM232GxJ3z0g=="},
+						},
 					}).Build(),
 				expected: newBSWithDefaults().setProp(func(cdn *compute.BackendServiceCdnPolicy) {
 					cdn.SignedUrlCacheMaxAgeSec = 1234
+					cdn.SignedUrlKeyNames = []string{"key1", "key2", "key3"}
 				}).build(),
 			},
 			{
@@ -695,9 +701,15 @@ func TestCDNSignedUrlCacheMaxAgeSec(t *testing.T) {
 					SetCDNConfig(&backendconfig.CDNConfig{
 						Enabled:                 true,
 						SignedUrlCacheMaxAgeSec: createInt64(3421),
+						SignedUrlKeys: []*backendconfig.SignedUrlKey{
+							{KeyName: "key4", KeyValue: "MH5PnJa2HCKM232GxJ3z0g=="},
+							{KeyName: "key5", KeyValue: "MH5PnJa2HCKM232GxJ3z0g=="},
+							{KeyName: "key6", KeyValue: "MH5PnJa2HCKM232GxJ3z0g=="},
+						},
 					}).Build(),
 				expected: newBSWithDefaults().setProp(func(cdn *compute.BackendServiceCdnPolicy) {
 					cdn.SignedUrlCacheMaxAgeSec = 3421
+					cdn.SignedUrlKeyNames = []string{"key4", "key5", "key6"}
 				}).build(),
 			},
 			{
