@@ -279,8 +279,8 @@ func AddSignedUrlKey(gceCloud *gce.Cloud, key *meta.Key, backendService *Backend
 			//return mc.Observe(gceCloud.Compute().AlphaRegionBackendServices().AddSignedUrlKey(ctx, key, alphaKey))
 		default:
 			klog.V(3).Infof("Updating alpha BackendService %v, add SignedUrlKey %s", key.Name, alphaKey.KeyName)
-			return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).AddSignedUrlKey(ctx, key, signedUrlKey))
-			//return mc.Observe(gceCloud.Compute().AlphaBackendServices().AddSignedUrlKey(ctx, key, alphaKey))
+			//return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).AddSignedUrlKey(ctx, key, signedUrlKey))
+			return mc.Observe(gceCloud.Compute().AlphaBackendServices().AddSignedUrlKey(ctx, key, alphaKey))
 		}
 	case meta.VersionBeta:
 		betaKey, err := signedUrlKey.ToBeta()
@@ -294,8 +294,8 @@ func AddSignedUrlKey(gceCloud *gce.Cloud, key *meta.Key, backendService *Backend
 			//return mc.Observe(gceCloud.Compute().BetaRegionBackendServices().AddSignedUrlKey(ctx, key, betaKey))
 		default:
 			klog.V(3).Infof("Updating beta BackendService %v, add SignedUrlKey %s", key.Name, betaKey.KeyName)
-			return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).AddSignedUrlKey(ctx, key, signedUrlKey))
-			//return mc.Observe(gceCloud.Compute().BetaBackendServices().AddSignedUrlKey(ctx, key, betaKey))
+			//return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).AddSignedUrlKey(ctx, key, signedUrlKey))
+			return mc.Observe(gceCloud.Compute().BetaBackendServices().AddSignedUrlKey(ctx, key, betaKey))
 		}
 	default:
 		gaKey, err := signedUrlKey.ToGA()
@@ -309,8 +309,8 @@ func AddSignedUrlKey(gceCloud *gce.Cloud, key *meta.Key, backendService *Backend
 			//return mc.Observe(gceCloud.Compute().RegionBackendServices().AddSignedUrlKey(ctx, key, gaKey))
 		default:
 			klog.V(3).Infof("Updating ga region BackendService %v, add SignedUrlKey %s", key.Name, gaKey.KeyName)
-			return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).AddSignedUrlKey(ctx, key, signedUrlKey))
-			//return mc.Observe(gceCloud.Compute().BackendServices().AddSignedUrlKey(ctx, key, gaKey))
+			//return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).AddSignedUrlKey(ctx, key, signedUrlKey))
+			return mc.Observe(gceCloud.Compute().BackendServices().AddSignedUrlKey(ctx, key, gaKey))
 		}
 	}
 }
@@ -328,8 +328,8 @@ func DeleteSignedUrlKey(gceCloud *gce.Cloud, key *meta.Key, backendService *Back
 			//return mc.Observe(gceCloud.Compute().AlphaRegionBackendServices().DeleteSignedUrlKey(ctx, key, keyName))
 		default:
 			klog.V(3).Infof("Updating alpha BackendService %v, delete SignedUrlKey %s", key.Name, keyName)
-			return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).DeleteSignedUrlKey(ctx, key, keyName))
-			//return mc.Observe(gceCloud.Compute().AlphaBackendServices().DeleteSignedUrlKey(ctx, key, keyName))
+			//return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).DeleteSignedUrlKey(ctx, key, keyName))
+			return mc.Observe(gceCloud.Compute().AlphaBackendServices().DeleteSignedUrlKey(ctx, key, keyName))
 		}
 	case meta.VersionBeta:
 		switch key.Type() {
@@ -339,8 +339,8 @@ func DeleteSignedUrlKey(gceCloud *gce.Cloud, key *meta.Key, backendService *Back
 			//return mc.Observe(gceCloud.Compute().BetaRegionBackendServices().DeleteSignedUrlKey(projectID, key, keyName))
 		default:
 			klog.V(3).Infof("Updating beta BackendService %v, delete SignedUrlKey %s", key.Name, keyName)
-			return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).DeleteSignedUrlKey(ctx, key, keyName))
-			//return mc.Observe(gceCloud.Compute().BetaBackendServices().DeleteSignedUrlKey(ctx, key, keyName))
+			//return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).DeleteSignedUrlKey(ctx, key, keyName))
+			return mc.Observe(gceCloud.Compute().BetaBackendServices().DeleteSignedUrlKey(ctx, key, keyName))
 		}
 	default:
 		switch key.Type() {
@@ -350,8 +350,8 @@ func DeleteSignedUrlKey(gceCloud *gce.Cloud, key *meta.Key, backendService *Back
 			//return mc.Observe(gceCloud.Compute().RegionBackendServices().DeleteSignedUrlKey(ctx, key, keyName))
 		default:
 			klog.V(3).Infof("Updating ga BackendService %v, delete SignedUrlKey %s", key.Name, keyName)
-			return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).DeleteSignedUrlKey(ctx, key, keyName))
-			//return mc.Observe(gceCloud.Compute().BackendServices().DeleteSignedUrlKey(ctx, key, keyName))
+			//return mc.Observe(hackGceCloud(gceCloud.Compute().BackendServices()).DeleteSignedUrlKey(ctx, key, keyName))
+			return mc.Observe(gceCloud.Compute().BackendServices().DeleteSignedUrlKey(ctx, key, keyName))
 		}
 	}
 }

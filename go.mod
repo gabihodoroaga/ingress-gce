@@ -32,6 +32,7 @@ require (
 
 replace (
 	cloud.google.com/go => cloud.google.com/go v0.37.4
+	github.com/GoogleCloudPlatform/k8s-cloud-provider => github.com/gabihodoroaga/k8s-cloud-provider v1.16.1-0.20210706085724-5ef07702e087
 	k8s.io/api => k8s.io/api v0.19.0
 	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.19.0
 	k8s.io/apimachinery => k8s.io/apimachinery v0.19.0
