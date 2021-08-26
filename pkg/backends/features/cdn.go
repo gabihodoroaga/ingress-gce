@@ -17,8 +17,8 @@ limitations under the License.
 package features
 
 import (
-	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/kr/pretty"
@@ -63,43 +63,38 @@ func prettyPrint(a interface{}) string {
 }
 
 func sliceEqual(a, b []string) bool {
-	if a == nil || len(a) == 0 {
-		return b == nil || len(b) == 0
+	if len(a) == 0 {
+		return len(b) == 0
 	}
 	return reflect.DeepEqual(a, b)
 }
 
+type negativeCachePolicySortInterface []*composite.BackendServiceCdnPolicyNegativeCachingPolicy
+
+func (l negativeCachePolicySortInterface) Len() int           { return len(l) }
+func (l negativeCachePolicySortInterface) Less(i, j int) bool { return l[i].Code < l[j].Code }
+func (l negativeCachePolicySortInterface) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }
+
 func negativeCachingPolicyEqual(x, y []*composite.BackendServiceCdnPolicyNegativeCachingPolicy) bool {
-	if len(x) != len(y) {
-		return false
-	}
-	diff := make(map[string]int, len(x))
-	for _, v := range x {
-		diff[fmt.Sprintf("%d-%d", v.Code, v.Ttl)]++
-	}
-	for _, v := range y {
-		key := fmt.Sprintf("%d-%d", v.Code, v.Ttl)
-		if _, ok := diff[key]; !ok {
-			return false
-		}
-		diff[key]--
-		if diff[key] == 0 {
-			delete(diff, key)
-		}
-	}
-	return len(diff) == 0
+
+	xSorted := negativeCachePolicySortInterface(x[:])
+	ySorted := negativeCachePolicySortInterface(y[:])
+	sort.Sort(xSorted)
+	sort.Sort(ySorted)
+
+	return reflect.DeepEqual(xSorted, ySorted)
 }
 
 // applyCDNSettings applies the CDN settings specified in the BackendConfig
 // to the passed in compute.BackendService. A GCE API call still needs to be
 // made to actually persist the changes.
-func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (changed bool) {
+func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) bool {
 	cdnConfig := sp.BackendConfig.Spec.Cdn
-	changed = be.EnableCDN != cdnConfig.Enabled
+	changed := be.EnableCDN != cdnConfig.Enabled
 
 	if !cdnConfig.Enabled {
 		be.EnableCDN = false
-		return
+		return changed
 	}
 
 	be.EnableCDN = true
@@ -321,5 +316,5 @@ func applyCDNSettings(sp utils.ServicePort, be *composite.BackendService) (chang
 	}
 
 	// changes for SignedUrlKeys are handled outside this module
-	return
+	return changed
 }
