@@ -26,26 +26,26 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/ingress-gce/pkg/metrics"
-
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/tools/cache"
-
 	istioV1alpha3 "istio.io/api/networking/v1alpha3"
 	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1beta1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/ingress-gce/pkg/annotations"
+	"k8s.io/ingress-gce/pkg/metrics"
 	negtypes "k8s.io/ingress-gce/pkg/neg/types"
 	svcnegclient "k8s.io/ingress-gce/pkg/svcneg/client/clientset/versioned"
 	"k8s.io/ingress-gce/pkg/utils"
@@ -113,8 +113,7 @@ var (
 	}
 )
 
-func newTestController(kubeClient kubernetes.Interface) *Controller {
-	testContext := negtypes.NewTestContextWithKubeClient(kubeClient)
+func newTestControllerWithParamsAndContext(kubeClient kubernetes.Interface, testContext *negtypes.TestContext, runL4, enableEndpointSlices bool) *Controller {
 	dynamicSchema := runtime.NewScheme()
 	kubeClient.CoreV1().ConfigMaps("kube-system").Create(context.TODO(), &apiv1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "ingress-controller-config-test"}, Data: map[string]string{"enable-asm": "true"}}, metav1.CreateOptions{})
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(dynamicSchema)
@@ -122,7 +121,7 @@ func newTestController(kubeClient kubernetes.Interface) *Controller {
 	drDynamicInformer := dynamicinformer.NewFilteredDynamicInformer(dynamicClient, destinationGVR, apiv1.NamespaceAll, testContext.ResyncPeriod,
 		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 		nil)
-	controller := NewController(
+	return NewController(
 		kubeClient,
 		testContext.SvcNegClient,
 		dynamicClient.Resource(destinationGVR),
@@ -132,6 +131,7 @@ func newTestController(kubeClient kubernetes.Interface) *Controller {
 		testContext.PodInformer,
 		testContext.NodeInformer,
 		testContext.EndpointInformer,
+		testContext.EndpointSliceInformer,
 		drDynamicInformer.Informer(),
 		testContext.SvcNegInformer,
 		func() bool { return true },
@@ -146,35 +146,57 @@ func newTestController(kubeClient kubernetes.Interface) *Controller {
 		// TODO(freehan): enable readiness reflector for unit tests
 		false, // enableReadinessReflector
 		true,  // runIngress
-		false, //runL4Controller
+		runL4, //runL4Controller
 		false, //enableNonGcpMode
-		true,  //eanbleAsm
+		true,  //enableAsm
 		[]string{},
+		enableEndpointSlices,
 	)
-
-	return controller
+}
+func newTestController(kubeClient kubernetes.Interface) *Controller {
+	testContext := negtypes.NewTestContextWithKubeClient(kubeClient)
+	return newTestControllerWithParamsAndContext(kubeClient, testContext, false, false)
 }
 
 func TestIsHealthy(t *testing.T) {
-	controller := newTestController(fake.NewSimpleClientset())
-	defer controller.stop()
-
-	err := controller.IsHealthy()
-	if err != nil {
-		t.Errorf("Expect controller to be healthy initially: %v", err)
+	kubeClient := fake.NewSimpleClientset()
+	testContext := negtypes.NewTestContextWithKubeClient(kubeClient)
+	testCases := []struct {
+		enableEndpointSlices bool
+		desc                 string
+	}{
+		{
+			enableEndpointSlices: false,
+			desc:                 "Controller with endpoint slices disabled",
+		},
+		{
+			enableEndpointSlices: true,
+			desc:                 "Controller with endpoint slices enabled",
+		},
 	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			controller := newTestControllerWithParamsAndContext(kubeClient, testContext, false, tc.enableEndpointSlices)
+			defer controller.stop()
 
-	timestamp := time.Now().Add(-61 * time.Minute)
-	controller.syncTracker.Set(timestamp)
-	err = controller.IsHealthy()
-	if err == nil {
-		t.Errorf("Expect controller to NOT be healthy")
-	}
+			err := controller.IsHealthy()
+			if err != nil {
+				t.Errorf("Expect controller to be healthy initially: %v", err)
+			}
 
-	controller.syncTracker.Track()
-	err = controller.IsHealthy()
-	if err != nil {
-		t.Errorf("Expect controller to be healthy: %v", err)
+			timestamp := time.Now().Add(-61 * time.Minute)
+			controller.syncTracker.Set(timestamp)
+			err = controller.IsHealthy()
+			if err == nil {
+				t.Errorf("Expect controller to NOT be healthy")
+			}
+
+			controller.syncTracker.Track()
+			err = controller.IsHealthy()
+			if err != nil {
+				t.Errorf("Expect controller to be healthy: %v", err)
+			}
+		})
 	}
 }
 
@@ -320,14 +342,14 @@ func TestEnableNEGServiceWithIngress(t *testing.T) {
 //Also verifies that modifying the TrafficPolicy on the service will
 //take effect.
 func TestEnableNEGServiceWithL4ILB(t *testing.T) {
-	controller := newTestController(fake.NewSimpleClientset())
+	kubeClient := fake.NewSimpleClientset()
+	testContext := negtypes.NewTestContextWithKubeClient(kubeClient)
+	controller := newTestControllerWithParamsAndContext(kubeClient, testContext, true, false)
 	manager := controller.manager.(*syncerManager)
-	controller.runL4 = true
 	defer controller.stop()
 	var prevSyncerKey, updatedSyncerKey negtypes.NegSyncerKey
-	localMode := false
 	t.Logf("Creating L4 ILB service with ExternalTrafficPolicy:Cluster")
-	controller.serviceLister.Add(newTestILBService(controller, localMode, 80))
+	controller.serviceLister.Add(newTestILBService(controller, false, 80))
 	svcClient := controller.client.CoreV1().Services(testServiceNamespace)
 	svcKey := utils.ServiceKeyFunc(testServiceNamespace, testServiceName)
 	err := controller.processService(svcKey)
@@ -338,8 +360,25 @@ func TestEnableNEGServiceWithL4ILB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Service was not created.(*apiv1.Service) successfully, err: %v", err)
 	}
+	// No syncers created yet, because the service does not have the v2 finalizer.
+	validateSyncers(t, controller, 0, true)
+	svc.Finalizers = []string{gce.ILBFinalizerV2}
+	if svc, err = controller.client.CoreV1().Services(svc.Namespace).Update(context.TODO(), svc, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Failed to update test L4 ILB service with V2 finalizer: %v", err)
+	}
+	if err = controller.serviceLister.Update(svc); err != nil {
+		t.Fatalf("Failed to update service lister: %v", err)
+	}
+	if err = controller.processService(svcKey); err != nil {
+		t.Fatalf("Failed to process updated L4 ILB service with finalizer: %v", err)
+	}
+	// GET the service with the latest annotations.
+	svc, err = svcClient.Get(context.TODO(), testServiceName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Service was not created.(*apiv1.Service) successfully, err: %v", err)
+	}
 	expectedPortInfoMap := negtypes.NewPortInfoMapForVMIPNEG(testServiceNamespace, testServiceName,
-		controller.l4Namer, localMode)
+		controller.l4Namer, false)
 	// There will be only one entry in the map
 	for key, val := range expectedPortInfoMap {
 		prevSyncerKey = manager.getSyncerKey(testServiceNamespace, testServiceName, key, val)
@@ -349,15 +388,18 @@ func TestEnableNEGServiceWithL4ILB(t *testing.T) {
 	validateServiceAnnotationWithPortInfoMap(t, svc, expectedPortInfoMap)
 	// Now Update the service to change the TrafficPolicy
 	t.Logf("Updating L4 ILB service from ExternalTrafficPolicy:Cluster to Local")
-	localMode = true
-	if err = controller.serviceLister.Update(updateTestILBService(controller, localMode, svc)); err != nil {
-		t.Fatalf("Failed to update test L4 ILB service: %v", err)
+	svc.Spec.ExternalTrafficPolicy = apiv1.ServiceExternalTrafficPolicyTypeLocal
+	if svc, err = controller.client.CoreV1().Services(svc.Namespace).Update(context.TODO(), svc, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Failed to update test L4 ILB service with Local trafficPolicy: %v", err)
+	}
+	if err = controller.serviceLister.Update(svc); err != nil {
+		t.Fatalf("Failed to update service lister: %v", err)
 	}
 	if err = controller.processService(svcKey); err != nil {
 		t.Fatalf("Failed to process updated L4 ILB srvice: %v", err)
 	}
 	expectedPortInfoMap = negtypes.NewPortInfoMapForVMIPNEG(testServiceNamespace, testServiceName,
-		controller.l4Namer, localMode)
+		controller.l4Namer, true)
 	// There will be only one entry in the map
 	for key, val := range expectedPortInfoMap {
 		updatedSyncerKey = manager.getSyncerKey(testServiceNamespace, testServiceName, key, val)
@@ -370,6 +412,44 @@ func TestEnableNEGServiceWithL4ILB(t *testing.T) {
 	// check the port info map after all stale syncers have been deleted.
 	validateSyncerManagerWithPortInfoMap(t, controller, testServiceNamespace, testServiceName, expectedPortInfoMap)
 	validateServiceAnnotationWithPortInfoMap(t, svc, expectedPortInfoMap)
+}
+
+func TestEnqueueNodeWithILBSubsetting(t *testing.T) {
+	kubeClient := fake.NewSimpleClientset()
+	testContext := negtypes.NewTestContextWithKubeClient(kubeClient)
+	controller := newTestControllerWithParamsAndContext(kubeClient, testContext, true, false)
+	stopChan := make(chan struct{}, 1)
+	// start the informer directly, without starting the entire controller.
+	go testContext.NodeInformer.Run(stopChan)
+	defer func() {
+		stopChan <- struct{}{}
+		controller.stop()
+	}()
+	ctx := context.Background()
+	nodeClient := controller.client.CoreV1().Nodes()
+	node, err := nodeClient.Create(ctx, newTestNode("node1", true), metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to create test node, error - %v", err)
+	}
+	nodeKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(node)
+	if err != nil {
+		t.Fatalf("Failed to create node key for test node %v, error - %v", node, err)
+	}
+	// sleep for the Informer store to pick this up.
+	time.Sleep(5 * time.Second)
+	if list := testContext.NodeInformer.GetIndexer().List(); len(list) != 1 {
+		t.Errorf("Got nodes list - %v of size %d, want 1 element", list, len(list))
+	}
+	t.Logf("Checking for enqueue of node create event")
+	ensureNodeEnqueue(t, nodeKey, controller)
+	//mimic node moving to ready status.
+	node.Spec.Unschedulable = false
+	node.Status.Conditions = []v1.NodeCondition{{Type: v1.NodeReady, Status: v1.ConditionTrue}}
+	if _, err = nodeClient.Update(ctx, node, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Failed to update test node, error - %v", err)
+	}
+	t.Logf("Checking for enqueue of node update event")
+	ensureNodeEnqueue(t, nodeKey, controller)
 }
 
 // TestEnableNEGServiceWithILBIngress tests ILB service with NEG enabled
@@ -1184,6 +1264,134 @@ func TestEnableNegCRD(t *testing.T) {
 	}
 }
 
+func TestEnqueueEndpoints(t *testing.T) {
+	namespace := "nmspc"
+	service := "svc"
+	t.Parallel()
+	testCases := []struct {
+		desc          string
+		useSlices     bool
+		endpoints     *v1.Endpoints
+		endpointSlice *discovery.EndpointSlice
+		expectedKey   string
+	}{
+		{
+			desc:      "Enqueue endpoint",
+			useSlices: false,
+			endpoints: &v1.Endpoints{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      service,
+					Namespace: namespace,
+				},
+			},
+			expectedKey: fmt.Sprintf("%s/%s", namespace, service),
+		},
+		{
+			desc:      "Enqueue endpoint slices",
+			useSlices: true,
+			endpointSlice: &discovery.EndpointSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      service + "-1",
+					Namespace: namespace,
+					Labels:    map[string]string{discovery.LabelServiceName: service},
+				},
+			},
+			expectedKey: fmt.Sprintf("%s/%s", namespace, service),
+		},
+		{
+			desc:      "Enqueue malformed endpoint slices",
+			useSlices: true,
+			endpointSlice: &discovery.EndpointSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      service + "-1",
+					Namespace: namespace,
+					Labels:    map[string]string{discovery.LabelServiceName: "a/b/c/d"},
+				},
+			},
+			expectedKey: fmt.Sprintf("%s/%s", namespace, "a/b/c/d"),
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			kubeClient := fake.NewSimpleClientset()
+			testContext := negtypes.NewTestContextWithKubeClient(kubeClient)
+			controller := newTestControllerWithParamsAndContext(kubeClient, testContext, false, tc.useSlices)
+			stopChan := make(chan struct{}, 1)
+			// start the informer directly, without starting the entire controller.
+			if tc.useSlices {
+				go testContext.EndpointSliceInformer.Run(stopChan)
+			} else {
+				go testContext.EndpointInformer.Run(stopChan)
+			}
+			defer func() {
+				stopChan <- struct{}{}
+				controller.stop()
+			}()
+			ctx := context.Background()
+			var informer cache.SharedIndexInformer
+			if tc.useSlices {
+				endpointSliceClient := controller.client.DiscoveryV1beta1().EndpointSlices(namespace)
+				_, err := endpointSliceClient.Create(ctx, tc.endpointSlice, metav1.CreateOptions{})
+				if err != nil {
+					t.Fatalf("Failed to create test endpoint slice, error - %v", err)
+				}
+				informer = testContext.EndpointSliceInformer
+			} else {
+				endpointsClient := controller.client.CoreV1().Endpoints(namespace)
+				_, err := endpointsClient.Create(ctx, tc.endpoints, metav1.CreateOptions{})
+				if err != nil {
+					t.Fatalf("Failed to create test endpoint, error - %v", err)
+				}
+				informer = testContext.EndpointInformer
+			}
+			time.Sleep(5 * time.Second)
+			if list := informer.GetIndexer().List(); len(list) != 1 {
+				t.Errorf("Got list - %v of size %d, want 1 element", list, len(list))
+			}
+			t.Logf("Checking for enqueue of endopoint create event")
+			ensureEndpointEnqueue(t, tc.expectedKey, controller)
+		})
+	}
+}
+
+func getEvent(eventChan chan string, queue *workqueue.RateLimitingInterface) {
+	item, quit := (*queue).Get()
+	if quit {
+		return
+	}
+	// mark the item as done so that future enqueues will work.
+	(*queue).Done(item)
+	eventChan <- item.(string)
+}
+
+func ensureEnqueue(t *testing.T, wantedKey string, queue *workqueue.RateLimitingInterface) {
+	t.Helper()
+	eventChan := make(chan string)
+	go getEvent(eventChan, queue)
+	for {
+		select {
+		case gotKey := <-eventChan:
+			if gotKey != wantedKey {
+				t.Errorf("Got key %q, want %q", gotKey, wantedKey)
+			} else {
+				t.Logf("Got expected key %s", wantedKey)
+				return
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("Timed out waiting for enqueue %v", time.Now())
+			return
+		}
+	}
+}
+
+func ensureNodeEnqueue(t *testing.T, nodeKey string, controller *Controller) {
+	ensureEnqueue(t, nodeKey, &controller.nodeQueue)
+}
+
+func ensureEndpointEnqueue(t *testing.T, endpointKey string, controller *Controller) {
+	ensureEnqueue(t, endpointKey, &controller.endpointQueue)
+}
+
 func validateNegCRs(t *testing.T, svc *v1.Service, svcNegClient svcnegclient.Interface, namer negtypes.NetworkEndpointGroupNamer, negPortNameMap map[int32]string) {
 	t.Helper()
 
@@ -1538,16 +1746,6 @@ func newTestILBService(c *Controller, onlyLocal bool, port int) *apiv1.Service {
 	return svc
 }
 
-func updateTestILBService(c *Controller, onlyLocal bool, svc *apiv1.Service) *apiv1.Service {
-	if onlyLocal {
-		svc.Spec.ExternalTrafficPolicy = apiv1.ServiceExternalTrafficPolicyTypeLocal
-	} else {
-		svc.Spec.ExternalTrafficPolicy = apiv1.ServiceExternalTrafficPolicyTypeCluster
-	}
-	c.client.CoreV1().Services(svc.Namespace).Update(context.TODO(), svc, metav1.UpdateOptions{})
-	return svc
-}
-
 func newTestService(c *Controller, negIngress bool, negSvcPorts []int32) *apiv1.Service {
 	svcAnnotations := map[string]string{}
 	if negIngress || len(negSvcPorts) > 0 {
@@ -1590,6 +1788,18 @@ func newTestService(c *Controller, negIngress bool, negSvcPorts []int32) *apiv1.
 
 	c.client.CoreV1().Services(testServiceNamespace).Create(context.TODO(), svc, metav1.CreateOptions{})
 	return svc
+}
+
+func newTestNode(name string, unschedulable bool) *apiv1.Node {
+	return &apiv1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: apiv1.NodeSpec{
+			Unschedulable: unschedulable,
+		},
+	}
+
 }
 
 func newTestServiceCustomNamedNeg(c *Controller, negSvcPorts map[int32]string, ingress bool) *apiv1.Service {

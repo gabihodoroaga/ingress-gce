@@ -45,7 +45,7 @@ import (
 	"k8s.io/ingress-gce/pkg/utils"
 	"k8s.io/ingress-gce/pkg/utils/common"
 	namer_util "k8s.io/ingress-gce/pkg/utils/namer"
-	"k8s.io/kubernetes/pkg/util/slice"
+	"k8s.io/ingress-gce/pkg/utils/slice"
 	"k8s.io/legacy-cloud-providers/gce"
 )
 
@@ -1809,8 +1809,9 @@ func TestResourceDeletionWithProtocol(t *testing.T) {
 			lb, err = j.pool.Ensure(lbInfo)
 			if tc.disableHTTP && tc.disableHTTPS {
 				// we expect an invalid ingress configuration error here.
-				if err == nil || !strings.Contains(err.Error(), invalidConfigErrorMessage) {
-					t.Fatalf("pool.Ensure(%+v) = %v, want %v", lbInfo, err, fmt.Errorf(invalidConfigErrorMessage))
+				errMsg := errAllProtocolsDisabled.Error()
+				if err == nil || !strings.Contains(err.Error(), errMsg) {
+					t.Fatalf("pool.Ensure(%+v) = %v, want %s", lbInfo, err, errMsg)
 				}
 				return
 			}

@@ -38,12 +38,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/cloud-provider"
 	"k8s.io/ingress-gce/pkg/annotations"
 	"k8s.io/ingress-gce/pkg/flags"
 	"k8s.io/ingress-gce/pkg/utils/common"
+	"k8s.io/ingress-gce/pkg/utils/slice"
 	"k8s.io/klog"
-	"k8s.io/kubernetes/pkg/util/node"
-	"k8s.io/kubernetes/pkg/util/slice"
 	"k8s.io/legacy-cloud-providers/gce"
 )
 
@@ -71,31 +71,21 @@ const (
 	// kubernetes/kubernetes/pkg/controller/service/service_controller.go
 	LabelNodeRoleMaster = "node-role.kubernetes.io/master"
 	// LabelNodeRoleExcludeBalancer specifies that a node should be excluded from load-balancing
-	// This is a duplicate definition of the constant in:
-	// kubernetes/kubernetes/pkg/controller/service/service_controller.go
-	// This label is feature-gated in kubernetes/kubernetes but we do not have feature gates
-	// This will need to be updated after the end of the alpha
-	LabelNodeRoleExcludeBalancer = "alpha.service-controller.kubernetes.io/exclude-balancer"
+	// This is a duplicate definition of the constant in kubernetes core:
+	//  https://github.com/kubernetes/kubernetes/blob/ea0764452222146c47ec826977f49d7001b0ea8c/staging/src/k8s.io/api/core/v1/well_known_labels.go#L67
+	LabelNodeRoleExcludeBalancer = "node.kubernetes.io/exclude-from-external-load-balancers"
 	// ToBeDeletedTaint is the taint that the autoscaler adds when a node is scheduled to be deleted
 	// https://github.com/kubernetes/autoscaler/blob/cluster-autoscaler-0.5.2/cluster-autoscaler/utils/deletetaint/delete.go#L33
 	ToBeDeletedTaint         = "ToBeDeletedByClusterAutoscaler"
 	L4ILBServiceDescKey      = "networking.gke.io/service-name"
 	L4ILBSharedResourcesDesc = "This resource is shared by all L4 ILB Services using ExternalTrafficPolicy: Cluster."
 
-	// ServiceNodeExclusionFeature is the feature gate name that
-	// enables nodes to exclude themselves from service load balancers
-	// originated from: https://github.com/kubernetes/kubernetes/blob/28e800245e/pkg/features/kube_features.go#L178
-	ServiceNodeExclusionFeature = "ServiceNodeExclusion"
-
 	// LabelAlphaNodeRoleExcludeBalancer specifies that the node should be
 	// exclude from load balancers created by a cloud provider. This label is deprecated and will
 	// be removed in 1.18.
 	LabelAlphaNodeRoleExcludeBalancer = "alpha.service-controller.kubernetes.io/exclude-balancer"
-
-	// LegacyNodeRoleBehaviorFeature is the feature gate name that enables legacy
-	// behavior to vary cluster functionality on the node-role.kubernetes.io
-	// labels.
-	LegacyNodeRoleBehaviorFeature = "LegacyNodeRoleBehavior"
+	GKEUpgradeOperation               = "operation_type: UPGRADE_NODES"
+	GKECurrentOperationAnnotation     = "gke-current-operation"
 )
 
 // FrontendGCAlgorithm species GC algorithm used for ingress frontend resources.
@@ -366,48 +356,61 @@ type NodeConditionPredicate func(node *api_v1.Node) bool
 // kubernetes/kubernetes/pkg/controller/service/service_controller.go
 func GetNodeConditionPredicate() NodeConditionPredicate {
 	return func(node *api_v1.Node) bool {
-		// We add the master to the node list, but its unschedulable.  So we use this to filter
-		// the master.
-		if node.Spec.Unschedulable {
+		return nodePredicateInternal(node, false)
+	}
+}
+
+// NodeConditionPredicateIncludeUnreadyNodes returns a predicate function that tolerates unready nodes.
+func NodeConditionPredicateIncludeUnreadyNodes() NodeConditionPredicate {
+	return func(node *api_v1.Node) bool {
+		return nodePredicateInternal(node, true)
+	}
+}
+
+func nodePredicateInternal(node *api_v1.Node, includeUnreadyNodes bool) bool {
+	// Get all nodes that have a taint with NoSchedule effect
+	for _, taint := range node.Spec.Taints {
+		if taint.Key == ToBeDeletedTaint {
 			return false
 		}
+	}
 
-		// Get all nodes that have a taint with NoSchedule effect
-		for _, taint := range node.Spec.Taints {
-			if taint.Key == ToBeDeletedTaint {
-				return false
-			}
-		}
+	// As of 1.6, we will taint the master, but not necessarily mark it unschedulable.
+	// Recognize nodes labeled as master, and filter them also, as we were doing previously.
+	if _, hasMasterRoleLabel := node.Labels[LabelNodeRoleMaster]; hasMasterRoleLabel {
+		return false
+	}
 
-		// As of 1.6, we will taint the master, but not necessarily mark it unschedulable.
-		// Recognize nodes labeled as master, and filter them also, as we were doing previously.
-		if _, hasMasterRoleLabel := node.Labels[LabelNodeRoleMaster]; hasMasterRoleLabel {
-			return false
-		}
+	// Will be removed in 1.18
+	if _, hasExcludeBalancerLabel := node.Labels[LabelAlphaNodeRoleExcludeBalancer]; hasExcludeBalancerLabel {
+		return false
+	}
 
-		// Will be removed in 1.18
-		if _, hasExcludeBalancerLabel := node.Labels[LabelAlphaNodeRoleExcludeBalancer]; hasExcludeBalancerLabel {
-			return false
-		}
+	if _, hasExcludeBalancerLabel := node.Labels[LabelNodeRoleExcludeBalancer]; hasExcludeBalancerLabel {
+		return false
+	}
+	// This node is about to be upgraded.
+	if opVal, _ := node.Annotations[GKECurrentOperationAnnotation]; strings.Contains(opVal, GKEUpgradeOperation) {
+		return false
+	}
 
-		if _, hasExcludeBalancerLabel := node.Labels[LabelNodeRoleExcludeBalancer]; hasExcludeBalancerLabel {
-			return false
-		}
-
-		// If we have no info, don't accept
-		if len(node.Status.Conditions) == 0 {
-			return false
-		}
-		for _, cond := range node.Status.Conditions {
-			// We consider the node for load balancing only when its NodeReady condition status
-			// is ConditionTrue
-			if cond.Type == api_v1.NodeReady && cond.Status != api_v1.ConditionTrue {
-				klog.V(4).Infof("Ignoring node %v with %v condition status %v", node.Name, cond.Type, cond.Status)
-				return false
-			}
-		}
+	// If we have no info, don't accept
+	if len(node.Status.Conditions) == 0 {
+		return false
+	}
+	if includeUnreadyNodes {
 		return true
 	}
+	for _, cond := range node.Status.Conditions {
+		// We consider the node for load balancing only when its NodeReady condition status
+		// is ConditionTrue
+		if cond.Type == api_v1.NodeReady && cond.Status != api_v1.ConditionTrue {
+			klog.V(4).Infof("Ignoring node %v with %v condition status %v", node.Name, cond.Type, cond.Status)
+			return false
+		}
+	}
+	return true
+
 }
 
 // ListWithPredicate gets nodes that matches predicate function.
@@ -429,11 +432,24 @@ func ListWithPredicate(nodeLister listers.NodeLister, predicate NodeConditionPre
 
 // GetNodePrimaryIP returns a primary internal IP address of the node.
 func GetNodePrimaryIP(inputNode *api_v1.Node) string {
-	ip, err := node.GetPreferredNodeAddress(inputNode, []api_v1.NodeAddressType{api_v1.NodeInternalIP})
+	ip, err := getPreferredNodeAddress(inputNode, []api_v1.NodeAddressType{api_v1.NodeInternalIP})
 	if err != nil {
 		klog.Errorf("Failed to get IP address for node %s", inputNode.Name)
 	}
 	return ip
+}
+
+// getPreferredNodeAddress returns the address of the provided node, using the provided preference order.
+// If none of the preferred address types are found, an error is returned.
+func getPreferredNodeAddress(node *api_v1.Node, preferredAddressTypes []api_v1.NodeAddressType) (string, error) {
+	for _, addressType := range preferredAddressTypes {
+		for _, address := range node.Status.Addresses {
+			if address.Type == addressType {
+				return address.Address, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no matching node IP")
 }
 
 // NewNamespaceIndexer returns a new Indexer for use by SharedIndexInformers
@@ -593,6 +609,15 @@ func TranslateAffinityType(affinityType string) string {
 // IsLegacyL4ILBService returns true if the given LoadBalancer service is managed by service controller.
 func IsLegacyL4ILBService(svc *api_v1.Service) bool {
 	return slice.ContainsString(svc.ObjectMeta.Finalizers, common.LegacyILBFinalizer, nil)
+}
+
+// IsSubsettingL4ILBService returns true if the given LoadBalancer service is managed by NEG and L4 controller.
+func IsSubsettingL4ILBService(svc *api_v1.Service) bool {
+	return slice.ContainsString(svc.ObjectMeta.Finalizers, common.ILBFinalizerV2, nil)
+}
+
+func LegacyForwardingRuleName(svc *api_v1.Service) string {
+	return cloudprovider.DefaultLoadBalancerName(svc)
 }
 
 // L4ILBResourceDescription stores the description fields for L4 ILB resources.

@@ -19,11 +19,11 @@ import (
 	"strconv"
 	"strings"
 
-	"k8s.io/ingress-gce/pkg/flags"
-
+	"k8s.io/ingress-gce/pkg/utils/endpointslices"
 	"k8s.io/klog"
 
 	api_v1 "k8s.io/api/core/v1"
+	discoveryapi "k8s.io/api/discovery/v1beta1"
 	v1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,6 +38,7 @@ import (
 	"k8s.io/ingress-gce/pkg/backendconfig"
 	"k8s.io/ingress-gce/pkg/context"
 	"k8s.io/ingress-gce/pkg/controller/errors"
+	"k8s.io/ingress-gce/pkg/flags"
 	"k8s.io/ingress-gce/pkg/utils"
 	namer_util "k8s.io/ingress-gce/pkg/utils/namer"
 )
@@ -128,6 +129,28 @@ func setAppProtocol(sp *utils.ServicePort, svc *api_v1.Service, port *api_v1.Ser
 	return nil
 }
 
+func setTrafficScaling(sp *utils.ServicePort, svc *api_v1.Service) error {
+	const maxRatePerEndpointKey = "networking.gke.io/max-rate-per-endpoint"
+	if s, ok := svc.Annotations[maxRatePerEndpointKey]; ok {
+		val, err := strconv.ParseFloat(s, 64)
+		if err != nil || val < 0.0 {
+			return fmt.Errorf(`invalid value for Service annotation %s, should be an integer > 0, got %q`, maxRatePerEndpointKey, s)
+		}
+		sp.MaxRatePerEndpoint = &val
+	}
+
+	const capacityScalerKey = "networking.gke.io/capacity-scaler"
+	if s, ok := svc.Annotations[capacityScalerKey]; ok {
+		val, err := strconv.ParseFloat(s, 64)
+		if err != nil || (val < 0.0 || val > 1.0) {
+			return fmt.Errorf(`invalid value for Service annotation %s, should be a number >= 0.0 and <= 1.0, got %q`, capacityScalerKey, s)
+		}
+		sp.CapacityScaler = &val
+	}
+
+	return nil
+}
+
 // maybeEnableBackendConfig sets the backendConfig for the service port if necessary
 func (t *Translator) maybeEnableBackendConfig(sp *utils.ServicePort, svc *api_v1.Service, port *api_v1.ServicePort) error {
 	var beConfig *backendconfigv1.BackendConfig
@@ -183,6 +206,12 @@ func (t *Translator) getServicePort(id utils.ServicePortID, params *getServicePo
 
 	if err := setAppProtocol(svcPort, svc, port); err != nil {
 		return svcPort, err
+	}
+
+	if flags.F.EnableTrafficScaling {
+		if err := setTrafficScaling(svcPort, svc); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := t.maybeEnableBackendConfig(svcPort, svc, port); err != nil {
@@ -276,9 +305,6 @@ func validateAndGetPaths(path v1.HTTPIngressPath) ([]string, error) {
 	pathType := v1.PathTypeImplementationSpecific
 
 	if path.PathType != nil {
-		if !flags.F.EnableIngressGAFields && *path.PathType != v1.PathTypeImplementationSpecific {
-			return nil, fmt.Errorf("only \"ImplementationSpecific\" path type is supported")
-		}
 		pathType = *path.PathType
 	}
 
@@ -437,7 +463,12 @@ func (t *Translator) GatherEndpointPorts(svcPorts []utils.ServicePort) []string 
 			// For NEG backend, need to open firewall to all endpoint target ports
 			// TODO(mixia): refactor firewall syncing into a separate go routine with different trigger.
 			// With NEG, endpoint changes may cause firewall ports to be different if user specifies inconsistent backends.
-			endpointPorts := listEndpointTargetPorts(t.ctx.EndpointInformer.GetIndexer(), p.ID.Service.Namespace, p.ID.Service.Name, p.TargetPort)
+			var endpointPorts []int
+			if t.ctx.UseEndpointSlices {
+				endpointPorts = listEndpointTargetPortsFromEndpointSlices(t.ctx.EndpointSliceInformer.GetIndexer(), p.ID.Service.Namespace, p.ID.Service.Name, p.TargetPort)
+			} else {
+				endpointPorts = listEndpointTargetPortsFromEndpoints(t.ctx.EndpointInformer.GetIndexer(), p.ID.Service.Namespace, p.ID.Service.Name, p.TargetPort)
+			}
 			for _, ep := range endpointPorts {
 				portMap[int64(ep)] = true
 			}
@@ -525,7 +556,36 @@ func listAll(store cache.Store, selector labels.Selector, appendFn cache.AppendF
 	return nil
 }
 
-func listEndpointTargetPorts(indexer cache.Indexer, namespace, name, targetPort string) []int {
+// returns target port if port number is specified, finds the actual target port behind the named target port
+func listEndpointTargetPortsFromEndpointSlices(indexer cache.Indexer, namespace, name, targetPort string) []int {
+	// if targetPort is integer, no need to translate to endpoint slices ports
+	if i, err := strconv.Atoi(targetPort); err == nil {
+		return []int{i}
+	}
+	slices, err := indexer.ByIndex(endpointslices.EndpointSlicesByServiceIndex, endpointslices.FormatEndpointSlicesServiceKey(namespace, name))
+	if len(slices) == 0 {
+		klog.Errorf("No Endpoint Slices found for service %s/%s.", namespace, name)
+		return []int{}
+	}
+	if err != nil {
+		klog.Errorf("Failed to retrieve endpoint slices for service %s/%s: %v", namespace, name, err)
+		return []int{}
+	}
+
+	ret := []int{}
+	for _, sliceObj := range slices {
+		slice := sliceObj.(*discoveryapi.EndpointSlice)
+		for _, port := range slice.Ports {
+			if port.Protocol != nil && *port.Protocol == api_v1.ProtocolTCP && port.Name != nil && *port.Name == targetPort && port.Port != nil {
+				ret = append(ret, int(*port.Port))
+			}
+		}
+	}
+	return ret
+}
+
+// returns target port if port number is specified, finds the actual target port behind the named target port
+func listEndpointTargetPortsFromEndpoints(indexer cache.Indexer, namespace, name, targetPort string) []int {
 	// if targetPort is integer, no need to translate to endpoint ports
 	if i, err := strconv.Atoi(targetPort); err == nil {
 		return []int{i}
