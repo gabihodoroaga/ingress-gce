@@ -63,7 +63,9 @@ func prettyPrint(a interface{}) string {
 }
 
 func sliceEqual(a, b []string) bool {
-	if len(a) == 0 && len(b) == 0 { return true }
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
 	return reflect.DeepEqual(a, b)
 }
 
@@ -75,8 +77,8 @@ func (l negativeCachePolicySortInterface) Swap(i, j int)      { l[i], l[j] = l[j
 
 func negativeCachingPolicyEqual(x, y []*composite.BackendServiceCdnPolicyNegativeCachingPolicy) bool {
 
-	xSorted := negativeCachePolicySortInterface(append( []*composite.BackendServiceCdnPolicyNegativeCachingPolicy{},  x...))
-	ySorted := negativeCachePolicySortInterface(append( []*composite.BackendServiceCdnPolicyNegativeCachingPolicy{},  y...))
+	xSorted := negativeCachePolicySortInterface(append([]*composite.BackendServiceCdnPolicyNegativeCachingPolicy{}, x...))
+	ySorted := negativeCachePolicySortInterface(append([]*composite.BackendServiceCdnPolicyNegativeCachingPolicy{}, y...))
 	sort.Sort(xSorted)
 	sort.Sort(ySorted)
 
